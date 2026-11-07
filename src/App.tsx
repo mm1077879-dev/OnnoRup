@@ -46,6 +46,10 @@ function createHistoryEntryKey() {
     : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+function setDocumentScrollTop(top: number) {
+  window.scrollTo({ top, left: 0, behavior: 'instant' });
+}
+
 function AppContent() {
   // Parse initial route from browser URL
   const getInitialState = () => {
@@ -134,9 +138,10 @@ function AppContent() {
     const currentState = getHistoryState(window.history.state);
     const metadata = getScrollMetadata(currentState);
     const key = metadata?.key || historyEntryKey;
-    const y = metadata?.y ?? 0;
+    const y = 0;
     activeHistoryEntryKey.current = key;
     pendingScrollRestoration.current = { key, y };
+    setDocumentScrollTop(y);
     window.history.replaceState({
       ...currentState,
       view: currentView,
@@ -171,7 +176,7 @@ function AppContent() {
       if (pendingScrollRestoration.current === pending) {
         pendingScrollRestoration.current = null;
       }
-      window.scrollTo({ top: Math.min(pending.y, maxY), left: 0, behavior: 'auto' });
+      setDocumentScrollTop(Math.min(pending.y, maxY));
       saveScrollPosition(Math.min(pending.y, maxY));
     };
 
@@ -217,6 +222,7 @@ function AppContent() {
     const currentFull = window.location.pathname + window.location.search;
     if (currentFull !== targetPath) {
       if (!pendingScrollRestoration.current) saveScrollPosition();
+      setDocumentScrollTop(0);
       const key = createHistoryEntryKey();
       window.history.pushState({
         view,
