@@ -1,0 +1,194 @@
+import 'dotenv/config';
+import express from 'express';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { initDatabase, getDbStatus } from './server/db';
+import { authMiddleware } from './server/middleware/auth';
+import { ProductModel } from './server/models/Product';
+import { INITIAL_PRODUCTS } from './server/data/initialData';
+import authRoutes from './server/routes/authRoutes';
+import productRoutes from './server/routes/productRoutes';
+import categoryRoutes from './server/routes/categoryRoutes';
+import checkoutRoutes from './server/routes/checkoutRoutes';
+import orderRoutes from './server/routes/orderRoutes';
+import reviewRoutes from './server/routes/reviewRoutes';
+import cmsRoutes from './server/routes/cmsRoutes';
+import uploadRoutes from './server/routes/uploadRoutes';
+import adminRoutes from './server/routes/adminRoutes';
+import analyticsRoutes from './server/routes/analyticsRoutes';
+import cartRoutes from './server/routes/cartRoutes';
+import homepageBuilderRoutes from './server/routes/homepageBuilderRoutes';
+import contactRoutes from './server/routes/contactRoutes';
+import blogRoutes from './server/routes/blogRoutes';
+import wishlistRoutes from './server/routes/wishlistRoutes';
+import paymentRoutes from './server/routes/paymentRoutes';
+import recommendationRoutes from './server/routes/recommendationRoutes';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+async function startServer() {
+  const app = express();
+  const PORT = parseInt(process.env.PORT || '3000', 10);
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  // Comprehensive OWASP Security Headers Middleware
+  app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+
+    // HSTS when over HTTPS
+    if (req.secure || req.get('x-forwarded-proto') === 'https') {
+      res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
+    }
+
+    // Content Security Policy
+    res.setHeader(
+      'Content-Security-Policy',
+      `default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://accounts.google.com https://connect.facebook.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https: blob:; connect-src 'self' https: wss:${isProduction ? '' : ' ws://localhost:24678'}; frame-src 'self' https://accounts.google.com https://www.facebook.com;`
+    );
+    next();
+  });
+
+  // Request limits & parser
+  app.use(express.json({ limit: '15mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+  // NoSQL Injection sanitizer for queries and bodies
+  app.use((req, res, next) => {
+    const sanitize = (obj: any): any => {
+      if (!obj || typeof obj !== 'object') return obj;
+      for (const key of Object.keys(obj)) {
+        if (key.startsWith('$') || key.includes('.')) {
+          delete obj[key];
+        } else if (typeof obj[key] === 'object') {
+          sanitize(obj[key]);
+        }
+      }
+      return obj;
+    };
+    if (req.body) sanitize(req.body);
+    if (req.query) sanitize(req.query);
+    next();
+  });
+
+  app.use(authMiddleware);
+
+  // Initialize MongoDB Atlas connection
+  console.log('🚀 [NOVARA COMMERCE] Initializing backend services...');
+  await initDatabase();
+
+  if (process.env.NODE_ENV !== 'production' || process.env.STRICT_DB === 'true') {
+    try {
+      const productCount = await ProductModel.countDocuments();
+      if (productCount === 0 && INITIAL_PRODUCTS.length > 0) {
+        await ProductModel.insertMany(INITIAL_PRODUCTS.map((product) => ({
+          ...product,
+          variants: product.variants || [],
+          images: product.images || [],
+          attributes: product.attributes || {},
+          banglaKeywords: product.banglaKeywords || [],
+          status: 'published',
+        })));
+        console.log(`🌱 Seeded ${INITIAL_PRODUCTS.length} fallback catalog products for local storefront testing.`);
+      }
+    } catch (error) {
+      console.warn('⚠️ Failed to seed fallback catalog products:', error instanceof Error ? error.message : error);
+    }
+  }
+
+  // API Health & DB status
+  app.get('/api/health', (req, res) => {
+    res.json({
+      status: 'healthy',
+      app: 'NOVARA COMMERCE',
+      environment: process.env.NODE_ENV || 'development',
+      database: getDbStatus(),
+      timestamp: new Date().toISOString(),
+    });
+  });
+
+  // Mount API modules
+  app.use('/api/auth', authRoutes);
+  app.use('/api/products', productRoutes);
+  app.use('/api/categories', categoryRoutes);
+  app.use('/api/checkout', checkoutRoutes);
+  app.use('/api/orders', orderRoutes);
+  app.use('/api/reviews', reviewRoutes);
+  app.use('/api/cms', cmsRoutes);
+  app.use('/api/analytics', analyticsRoutes);
+  app.use('/api/upload', uploadRoutes);
+  app.use('/api/admin', adminRoutes);
+  app.use('/api/cart', cartRoutes);
+  app.use('/api/homepage', homepageBuilderRoutes);
+  app.use('/api/admin/homepage', homepageBuilderRoutes);
+  app.use('/api/contact', contactRoutes);
+  app.use('/api/blog', blogRoutes);
+  app.use('/api/wishlist', wishlistRoutes);
+  app.use('/api/payment', paymentRoutes);
+  app.use('/api/recommendations', recommendationRoutes);
+
+  // Convenience root aliases for sliders, banners, and ads
+  app.use('/api/sliders', (req, res, next) => {
+    req.url = req.url === '/' ? '/sliders' : `/sliders${req.url}`;
+    cmsRoutes(req, res, next);
+  });
+  app.use('/api/banners', (req, res, next) => {
+    req.url = req.url === '/' ? '/banners' : `/banners${req.url}`;
+    cmsRoutes(req, res, next);
+  });
+  app.use('/api/advertisements', (req, res, next) => {
+    req.url = req.url === '/' ? '/advertisements' : `/advertisements${req.url}`;
+    cmsRoutes(req, res, next);
+  });
+
+  // Fallback error handler when database is offline
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (err.name === 'MongooseError' || err.name === 'MongoNetworkError' || (err.message && err.message.includes('buffering timed out'))) {
+      console.warn('[AI Studio] Database offline — returning mock fallback response');
+      if (req.method === 'GET') {
+        return res.json(req.path.endsWith('s') || req.path.endsWith('s/') ? [] : {});
+      }
+      return res.status(503).json({ error: 'Service temporarily unavailable (database offline)' });
+    }
+    next(err);
+  });
+
+  // Serve static assets from public
+  app.use(express.static(path.resolve(__dirname, 'public')));
+
+  if (!isProduction) {
+    // Development mode with Vite middleware
+    const { createServer: createViteServer } = await import('vite');
+    const vite = await createViteServer({
+      server: {
+        middlewareMode: true,
+        allowedHosts: true,
+        hmr: process.env.DISABLE_HMR !== 'true',
+        watch: process.env.DISABLE_HMR === 'true' ? null : {},
+      },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  } else {
+    // Production mode
+    const distPath = path.resolve(__dirname, 'dist');
+    app.use(express.static(distPath));
+    app.get('*', (req, res) => {
+      res.sendFile(path.resolve(distPath, 'index.html'));
+    });
+  }
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`✨ [NOVARA COMMERCE] Server running on http://0.0.0.0:${PORT}`);
+  });
+}
+
+startServer().catch((err) => {
+  console.error('Fatal server startup error:', err);
+  process.exit(1);
+});
