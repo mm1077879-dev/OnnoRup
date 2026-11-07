@@ -127,7 +127,6 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({
       setRelatedHasMore(false);
       setRelatedProducts([]);
       setDetailCategory(null);
-      window.scrollTo({ top: 0, behavior: 'smooth' });
 
       try {
         const res = await fetch(`/api/products/${encodeURIComponent(slug)}`);

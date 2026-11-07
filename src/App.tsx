@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import { Provider } from 'react-redux';
 import { store } from './app/store';
 import { StorefrontLayout } from './layouts/StorefrontLayout';
@@ -16,6 +16,35 @@ import { AboutPage } from './pages/AboutPage';
 import { BlogPage } from './pages/BlogPage';
 import { ContactPage } from './pages/ContactPage';
 import { CartPage } from './pages/CartPage';
+
+interface AppHistoryState {
+  view?: string;
+  params?: any;
+  __appScroll?: {
+    key: string;
+    y: number;
+  };
+  [key: string]: unknown;
+}
+
+function getHistoryState(value: unknown): AppHistoryState {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as AppHistoryState
+    : {};
+}
+
+function getScrollMetadata(state: AppHistoryState) {
+  const metadata = state.__appScroll;
+  return metadata && typeof metadata.key === 'string' && Number.isFinite(metadata.y)
+    ? metadata
+    : undefined;
+}
+
+function createHistoryEntryKey() {
+  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
 
 function AppContent() {
   // Parse initial route from browser URL
@@ -66,12 +95,105 @@ function AppContent() {
 
   const [currentView, setCurrentView] = useState<string>(() => getInitialState().view);
   const [viewParams, setViewParams] = useState<any>(() => getInitialState().params);
+  const [historyEntryKey, setHistoryEntryKey] = useState(() => {
+    const metadata = getScrollMetadata(getHistoryState(window.history.state));
+    return metadata?.key || createHistoryEntryKey();
+  });
+  const activeHistoryEntryKey = useRef(historyEntryKey);
+  const pendingScrollRestoration = useRef<{ key: string; y: number } | null>(null);
+
+  const saveScrollPosition = useCallback((y = window.scrollY) => {
+    const currentState = getHistoryState(window.history.state);
+    window.history.replaceState({
+      ...currentState,
+      __appScroll: { key: activeHistoryEntryKey.current, y },
+    }, '');
+  }, []);
+
+  // Keep the active history entry's position current for Back/Forward and reloads.
+  useEffect(() => {
+    let frameId: number | null = null;
+    const handleScroll = () => {
+      if (pendingScrollRestoration.current || frameId !== null) return;
+      frameId = requestAnimationFrame(() => {
+        frameId = null;
+        if (!pendingScrollRestoration.current) saveScrollPosition();
+      });
+    };
+
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+      if (frameId !== null) cancelAnimationFrame(frameId);
+    };
+  }, [saveScrollPosition]);
+
+  // Disable native restoration so it cannot race the app's route/layout updates.
+  useLayoutEffect(() => {
+    window.history.scrollRestoration = 'manual';
+    const currentState = getHistoryState(window.history.state);
+    const metadata = getScrollMetadata(currentState);
+    const key = metadata?.key || historyEntryKey;
+    const y = metadata?.y ?? 0;
+    activeHistoryEntryKey.current = key;
+    pendingScrollRestoration.current = { key, y };
+    window.history.replaceState({
+      ...currentState,
+      view: currentView,
+      params: viewParams,
+      __appScroll: { key, y },
+    }, '');
+  }, []);
+
+  // Restore only when the destination can accommodate the saved position.
+  useLayoutEffect(() => {
+    const pending = pendingScrollRestoration.current;
+    if (!pending || pending.key !== historyEntryKey) return;
+
+    let completed = false;
+    let frameId: number | null = null;
+    let timeoutId: number | null = null;
+    const observer = pending.y > 0 ? new ResizeObserver(() => restore()) : null;
+
+    const finish = (force = false) => {
+      if (completed) return;
+      const documentHeight = Math.max(
+        document.documentElement.scrollHeight,
+        document.body?.scrollHeight || 0,
+      );
+      const maxY = Math.max(0, documentHeight - window.innerHeight);
+      if (!force && maxY < pending.y) return;
+
+      completed = true;
+      observer?.disconnect();
+      if (frameId !== null) cancelAnimationFrame(frameId);
+      if (timeoutId !== null) window.clearTimeout(timeoutId);
+      if (pendingScrollRestoration.current === pending) {
+        pendingScrollRestoration.current = null;
+      }
+      window.scrollTo({ top: Math.min(pending.y, maxY), left: 0, behavior: 'auto' });
+      saveScrollPosition(Math.min(pending.y, maxY));
+    };
+
+    const restore = () => finish();
+    if (pending.y === 0) {
+      finish(true);
+    } else {
+      observer?.observe(document.documentElement);
+      frameId = requestAnimationFrame(restore);
+      timeoutId = window.setTimeout(() => finish(true), 2500);
+    }
+
+    return () => {
+      completed = true;
+      observer?.disconnect();
+      if (frameId !== null) cancelAnimationFrame(frameId);
+      if (timeoutId !== null) window.clearTimeout(timeoutId);
+    };
+  }, [historyEntryKey, saveScrollPosition]);
 
   // Synchronize history state
   const handleNavigate = useCallback((view: string, params: any = {}) => {
-    setCurrentView(view);
-    setViewParams(params);
-
     // Update browser URL seamlessly
     let targetPath = '/';
     if (view === 'home') targetPath = '/';
@@ -94,31 +216,48 @@ function AppContent() {
 
     const currentFull = window.location.pathname + window.location.search;
     if (currentFull !== targetPath) {
-      window.history.pushState({ view, params }, '', targetPath);
+      if (!pendingScrollRestoration.current) saveScrollPosition();
+      const key = createHistoryEntryKey();
+      window.history.pushState({
+        view,
+        params,
+        __appScroll: { key, y: 0 },
+      }, '', targetPath);
+      activeHistoryEntryKey.current = key;
+      pendingScrollRestoration.current = { key, y: 0 };
+      setHistoryEntryKey(key);
     }
-  }, []);
+    setCurrentView(view);
+    setViewParams(params);
+  }, [saveScrollPosition]);
 
   // Handle browser back/forward buttons
   useEffect(() => {
     const handlePopState = (e: PopStateEvent) => {
-      if (e.state && e.state.view) {
-        setCurrentView(e.state.view);
-        setViewParams(e.state.params || {});
-      } else {
-        const initial = getInitialState();
-        setCurrentView(initial.view);
-        setViewParams(initial.params);
-      }
+      const state = getHistoryState(e.state);
+      const initial = getInitialState();
+      const view = state.view || initial.view;
+      const params = state.params || initial.params;
+      const metadata = getScrollMetadata(state);
+      const key = metadata?.key || createHistoryEntryKey();
+      const y = metadata?.y ?? 0;
+
+      activeHistoryEntryKey.current = key;
+      pendingScrollRestoration.current = { key, y };
+      window.history.replaceState({
+        ...state,
+        view,
+        params,
+        __appScroll: { key, y },
+      }, '');
+      setHistoryEntryKey(key);
+      setCurrentView(view);
+      setViewParams(params);
     };
 
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
-
-  // Scroll to top on view change
-  useEffect(() => {
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  }, [currentView, viewParams]);
 
   // 1. ISOLATED ADMIN LAYOUT: Completely independent layout with zero customer header/footer
   if (currentView === 'admin') {

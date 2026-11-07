@@ -102,7 +102,6 @@ export const BlogPage: React.FC<BlogPageProps> = ({ initialSlug, onNavigate }) =
       const data = await res.json();
       if (data.success && data.data) {
         setSelectedArticle(data.data);
-        window.scrollTo({ top: 0, behavior: 'smooth' });
       }
     } catch (err) {
       console.error('Failed to load article detail', err);
