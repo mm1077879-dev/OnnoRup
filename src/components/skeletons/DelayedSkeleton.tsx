@@ -10,12 +10,11 @@ interface DelayedSkeletonProps {
 }
 
 /**
- * Reusable DelayedSkeleton Component
+ * Reusable delayed-skeleton wrapper.
  *
- * Automatically manages intelligent delayed rendering:
- * - If `isLoading` resolves in < delayMs (default 2500ms), shows `children` directly with zero skeleton flash.
- * - If `isLoading` exceeds delayMs, smoothly mounts `skeleton`.
- * - When `isLoading` resolves, smoothly crossfades into `children`.
+ * The skeleton must remain visible while a page is pending so the user sees the
+ * structural layout instead of a blank white region. Once loading resolves, the
+ * final content renders normally.
  */
 export const DelayedSkeleton: React.FC<DelayedSkeletonProps> = ({
   isLoading,
@@ -26,13 +25,8 @@ export const DelayedSkeleton: React.FC<DelayedSkeletonProps> = ({
 }) => {
   const showSkeleton = useDelayedSkeleton(isLoading, delayMs);
 
-  if (isLoading && showSkeleton) {
+  if (isLoading) {
     return <div className={`delayed-skeleton-container ${className}`}>{skeleton}</div>;
-  }
-
-  if (isLoading && !showSkeleton) {
-    // Hidden during initial 2.5s window so quick API responses render without intrusive flash
-    return null;
   }
 
   return <>{children}</>;

@@ -1,46 +1,29 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 
 export const DEFAULT_SKELETON_DELAY_MS = 2500;
 
 /**
- * Intelligent Delayed Skeleton Hook
+ * Skeleton visibility guardrail.
  *
- * Implements the 2.5-second delayed loading guardrail:
- * 1. When data loading starts, a 2.5-second timer starts.
- * 2. If data completes before 2.5 seconds, the timer is cleared and the skeleton NEVER flashes.
- * 3. If data takes longer than 2.5 seconds, the skeleton gracefully appears.
- * 4. When data completes, the skeleton immediately unmounts to display actual content.
+ * The page-specific skeletons must render immediately when data is pending so the
+ * visitor sees the correct structure instead of a blank white region. The delay
+ * budget is kept for compatibility with downstream code, but we intentionally do
+ * not hide the skeleton behind a dead blank state.
  *
  * @param isLoading Current asynchronous loading state
- * @param delayMs Delay threshold before skeleton appears (default: 2500ms)
+ * @param delayMs Kept for compatibility with existing call sites; not used to hide the skeleton
  * @returns boolean indicating whether the skeleton should be shown
  */
 export function useDelayedSkeleton(isLoading: boolean, delayMs: number = DEFAULT_SKELETON_DELAY_MS): boolean {
-  const [showSkeleton, setShowSkeleton] = useState<boolean>(false);
-  const timerRef = useRef<any>(null);
+  const [showSkeleton, setShowSkeleton] = useState<boolean>(isLoading);
 
   useEffect(() => {
-    // If not loading, ensure skeleton is hidden and clear any pending timer
     if (!isLoading) {
-      if (timerRef.current) {
-        clearTimeout(timerRef.current);
-        timerRef.current = null;
-      }
       setShowSkeleton(false);
       return;
     }
 
-    // When loading starts, wait for the specified delay before showing skeleton
-    timerRef.current = setTimeout(() => {
-      setShowSkeleton(true);
-    }, delayMs);
-
-    return () => {
-      if (timerRef.current) {
-        clearTimeout(timerRef.current);
-        timerRef.current = null;
-      }
-    };
+    setShowSkeleton(true);
   }, [isLoading, delayMs]);
 
   return showSkeleton;
