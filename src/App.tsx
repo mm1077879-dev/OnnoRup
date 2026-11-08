@@ -99,107 +99,22 @@ function AppContent() {
 
   const [currentView, setCurrentView] = useState<string>(() => getInitialState().view);
   const [viewParams, setViewParams] = useState<any>(() => getInitialState().params);
-  const [historyEntryKey, setHistoryEntryKey] = useState(() => {
-    const metadata = getScrollMetadata(getHistoryState(window.history.state));
-    return metadata?.key || createHistoryEntryKey();
-  });
-  const activeHistoryEntryKey = useRef(historyEntryKey);
-  const pendingScrollRestoration = useRef<{ key: string; y: number } | null>(null);
+  const lastRouteSignatureRef = useRef<string>('');
 
-  const saveScrollPosition = useCallback((y = window.scrollY) => {
-    const currentState = getHistoryState(window.history.state);
-    window.history.replaceState({
-      ...currentState,
-      __appScroll: { key: activeHistoryEntryKey.current, y },
-    }, '');
-  }, []);
-
-  // Keep the active history entry's position current for Back/Forward and reloads.
-  useEffect(() => {
-    let frameId: number | null = null;
-    const handleScroll = () => {
-      if (pendingScrollRestoration.current || frameId !== null) return;
-      frameId = requestAnimationFrame(() => {
-        frameId = null;
-        if (!pendingScrollRestoration.current) saveScrollPosition();
-      });
-    };
-
-    window.addEventListener('scroll', handleScroll, { passive: true });
-    return () => {
-      window.removeEventListener('scroll', handleScroll);
-      if (frameId !== null) cancelAnimationFrame(frameId);
-    };
-  }, [saveScrollPosition]);
-
-  // Disable native restoration so it cannot race the app's route/layout updates.
   useLayoutEffect(() => {
     window.history.scrollRestoration = 'manual';
-    const currentState = getHistoryState(window.history.state);
-    const metadata = getScrollMetadata(currentState);
-    const key = metadata?.key || historyEntryKey;
-    const y = 0;
-    activeHistoryEntryKey.current = key;
-    pendingScrollRestoration.current = { key, y };
-    setDocumentScrollTop(y);
-    window.history.replaceState({
-      ...currentState,
-      view: currentView,
-      params: viewParams,
-      __appScroll: { key, y },
-    }, '');
   }, []);
 
-  // Restore only when the destination can accommodate the saved position.
   useLayoutEffect(() => {
-    const pending = pendingScrollRestoration.current;
-    if (!pending || pending.key !== historyEntryKey) return;
+    const routeSignature = `${currentView}:${JSON.stringify(viewParams ?? {})}`;
+    if (lastRouteSignatureRef.current === routeSignature) return;
 
-    let completed = false;
-    let frameId: number | null = null;
-    let timeoutId: number | null = null;
-    const observer = pending.y > 0 ? new ResizeObserver(() => restore()) : null;
-
-    const finish = (force = false) => {
-      if (completed) return;
-      const documentHeight = Math.max(
-        document.documentElement.scrollHeight,
-        document.body?.scrollHeight || 0,
-      );
-      const maxY = Math.max(0, documentHeight - window.innerHeight);
-      if (!force && maxY < pending.y) return;
-
-      completed = true;
-      observer?.disconnect();
-      if (frameId !== null) cancelAnimationFrame(frameId);
-      if (timeoutId !== null) window.clearTimeout(timeoutId);
-      if (pendingScrollRestoration.current === pending) {
-        pendingScrollRestoration.current = null;
-      }
-      setDocumentScrollTop(Math.min(pending.y, maxY));
-      saveScrollPosition(Math.min(pending.y, maxY));
-    };
-
-    const restore = () => finish();
-    if (pending.y === 0) {
-      finish(true);
-    } else {
-      observer?.observe(document.documentElement);
-      frameId = requestAnimationFrame(restore);
-      timeoutId = window.setTimeout(() => finish(true), 2500);
-    }
-
-    return () => {
-      completed = true;
-      observer?.disconnect();
-      if (frameId !== null) cancelAnimationFrame(frameId);
-      if (timeoutId !== null) window.clearTimeout(timeoutId);
-    };
-  }, [historyEntryKey, saveScrollPosition]);
+    lastRouteSignatureRef.current = routeSignature;
+    setDocumentScrollTop(0);
+  }, [currentView, viewParams]);
 
   // Synchronize history state
   const handleNavigate = useCallback((view: string, params: any = {}) => {
-    // Update browser URL seamlessly
     let targetPath = '/';
     if (view === 'home') targetPath = '/';
     else if (view === 'admin') targetPath = params.module ? `/admin/${params.module}` : '/admin';
@@ -221,21 +136,16 @@ function AppContent() {
 
     const currentFull = window.location.pathname + window.location.search;
     if (currentFull !== targetPath) {
-      if (!pendingScrollRestoration.current) saveScrollPosition();
-      setDocumentScrollTop(0);
-      const key = createHistoryEntryKey();
       window.history.pushState({
         view,
         params,
-        __appScroll: { key, y: 0 },
+        __appScroll: { key: createHistoryEntryKey(), y: 0 },
       }, '', targetPath);
-      activeHistoryEntryKey.current = key;
-      pendingScrollRestoration.current = { key, y: 0 };
-      setHistoryEntryKey(key);
     }
+
     setCurrentView(view);
     setViewParams(params);
-  }, [saveScrollPosition]);
+  }, []);
 
   // Handle browser back/forward buttons
   useEffect(() => {
@@ -244,19 +154,8 @@ function AppContent() {
       const initial = getInitialState();
       const view = state.view || initial.view;
       const params = state.params || initial.params;
-      const metadata = getScrollMetadata(state);
-      const key = metadata?.key || createHistoryEntryKey();
-      const y = metadata?.y ?? 0;
 
-      activeHistoryEntryKey.current = key;
-      pendingScrollRestoration.current = { key, y };
-      window.history.replaceState({
-        ...state,
-        view,
-        params,
-        __appScroll: { key, y },
-      }, '');
-      setHistoryEntryKey(key);
+      window.history.scrollRestoration = 'manual';
       setCurrentView(view);
       setViewParams(params);
     };

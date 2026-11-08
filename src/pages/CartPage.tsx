@@ -140,7 +140,7 @@ export const CartPage: React.FC<CartPageProps> = ({
     if (showSkeleton) {
       return <CartSkeleton />;
     }
-    return null;
+    return <div className="min-h-[60vh] w-full bg-[#f8faf9]" aria-live="polite" aria-busy="true" />;
   }
 
   return (

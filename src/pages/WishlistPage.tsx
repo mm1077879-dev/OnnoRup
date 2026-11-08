@@ -361,7 +361,7 @@ export const WishlistPage: React.FC<WishlistPageProps> = ({
     if (showSkeleton) {
       return <WishlistSkeleton />;
     }
-    return null;
+    return <div className="min-h-[60vh] w-full bg-white" aria-live="polite" aria-busy="true" />;
   }
 
   const allSelected = products.length > 0 && selectedIds.length === products.length;

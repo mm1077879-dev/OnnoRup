@@ -275,7 +275,7 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({
     if (showSkeleton) {
       return <ProductDetailSkeleton />;
     }
-    return null;
+    return <div className="min-h-[65vh] w-full bg-white" aria-live="polite" aria-busy="true" />;
   }
 
   if (!product) {

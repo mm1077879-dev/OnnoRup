@@ -144,7 +144,7 @@ export const ShopPage: React.FC<ShopPageProps> = ({
     if (showSkeleton) {
       return <ShopSkeleton />;
     }
-    return null;
+    return <div className="min-h-[60vh] w-full bg-white" aria-live="polite" aria-busy="true" />;
   }
 
   return (

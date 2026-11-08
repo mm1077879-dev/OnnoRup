@@ -321,7 +321,7 @@ export const BlogPage: React.FC<BlogPageProps> = ({ initialSlug, onNavigate }) =
     if (showSkeleton) {
       return <BlogSkeleton />;
     }
-    return null;
+    return <div className="min-h-[60vh] w-full bg-white" aria-live="polite" aria-busy="true" />;
   }
 
   // Articles List View

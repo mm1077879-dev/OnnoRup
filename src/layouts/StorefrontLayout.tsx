@@ -47,7 +47,7 @@ export const StorefrontLayout: React.FC<StorefrontLayoutProps> = ({
       <Header currentView={currentView} onNavigate={onNavigate} />
 
       {/* 2. Main Storefront Content Area */}
-      <main className="flex-1">
+      <main className="flex-1 min-h-[55vh]">
         {children}
       </main>
 

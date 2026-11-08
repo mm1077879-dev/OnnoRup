@@ -200,7 +200,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
     if (showSkeleton) {
       return <HomepageSkeleton />;
     }
-    return null;
+    return <div className="min-h-[60vh] w-full bg-white" aria-live="polite" aria-busy="true" />;
   }
 
   return (
