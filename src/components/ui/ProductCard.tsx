@@ -3,7 +3,7 @@ import { useAppDispatch, useAppSelector } from '../../app/hooks';
 import { setCartItemsFromServer } from '../../features/cart/cartSlice';
 import { setWishlistProductIds } from '../../features/ui/uiSlice';
 import { addToast } from '../../features/toast/toastSlice';
-import { ShoppingCart Star, Heart } from 'lucide-react';
+import { ShoppingBag Star, Heart } from 'lucide-react';
 import { SeedProduct } from '../../../server/data/initialData';
 import { formatBDT } from '../../utils/currency';
 import { useCartFly } from '../../context/CartFlyContext';
@@ -163,7 +163,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, onViewProduct
             className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-[#00875a] hover:bg-[#00724c] text-white flex items-center justify-center transition shadow-xs hover:scale-105 active:scale-95 shrink-0 cursor-pointer"
             aria-label={`Add ${product.name} to cart`}
           >
-            <ShoppingCart className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-white" />
+            <ShoppingBag className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-white" />
           </button>
         </div>
       </div>
