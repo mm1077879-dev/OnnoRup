@@ -25,6 +25,60 @@ import {
   Info,
 } from 'lucide-react';
 
+interface GoogleCredentialResponse {
+  credential?: string;
+}
+
+interface GooglePromptNotification {
+  isNotDisplayed(): boolean;
+  isSkippedMoment(): boolean;
+  isDismissedMoment(): boolean;
+}
+
+interface GoogleIdentityApi {
+  initialize(options: {
+    client_id: string;
+    callback: (response: GoogleCredentialResponse) => void;
+    auto_select: boolean;
+    cancel_on_tap_outside: boolean;
+  }): void;
+  prompt(callback?: (notification: GooglePromptNotification) => void): void;
+}
+
+declare global {
+  interface Window {
+    google?: { accounts: { id: GoogleIdentityApi } };
+  }
+}
+
+let googleIdentityScriptPromise: Promise<void> | null = null;
+
+function loadGoogleIdentityServices(): Promise<void> {
+  if (window.google?.accounts?.id) return Promise.resolve();
+
+  if (!googleIdentityScriptPromise) {
+    googleIdentityScriptPromise = new Promise<void>((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://accounts.google.com/gsi/client';
+      script.async = true;
+      script.defer = true;
+      script.onload = () => resolve();
+      script.onerror = () => {
+        googleIdentityScriptPromise = null;
+        reject(new Error('Google Sign-In could not be loaded. Please try again.'));
+      };
+      document.head.appendChild(script);
+    });
+  }
+
+  return googleIdentityScriptPromise.then(() => {
+    if (!window.google?.accounts?.id) {
+      googleIdentityScriptPromise = null;
+      throw new Error('Google Sign-In did not initialize correctly. Please try again.');
+    }
+  });
+}
+
 interface AuthModalProps {
   onNavigate?: (view: string, params?: any) => void;
 }
@@ -59,16 +113,23 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onNavigate }) => {
     clientId?: string | null;
     appId?: string | null;
   }>({ google: false, facebook: false });
+  const [oauthStatusError, setOauthStatusError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const otpInputRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const googleInitializedRef = useRef(false);
+  const googleCredentialHandlerRef = useRef<(credential: string) => Promise<void>>(async () => {});
 
   // Query OAuth provider configuration status on mount
   useEffect(() => {
     fetch('/api/auth/oauth-status')
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) throw new Error('Unable to load sign-in configuration.');
+        return res.json();
+      })
       .then((data) => {
         if (data.success && data.providers) {
+          setOauthStatusError(null);
           setOauthStatus({
             google: Boolean(data.providers.google?.available),
             facebook: Boolean(data.providers.facebook?.available),
@@ -77,7 +138,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onNavigate }) => {
           });
         }
       })
-      .catch(() => {});
+      .catch(() => setOauthStatusError('Unable to load sign-in configuration. Please refresh and try again.'));
   }, []);
 
   // Reset steps and error when modal opens or mode changes
@@ -152,6 +213,33 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onNavigate }) => {
     if (pendingReturnUrl && onNavigate) {
       const cleanView = pendingReturnUrl.replace(/^\//, '');
       onNavigate(cleanView || 'home');
+    }
+  };
+
+  googleCredentialHandlerRef.current = async (credential) => {
+    try {
+      const response = await fetch('/api/auth/google', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ credential }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success || !data.token || !data.user) {
+        throw new Error(data.error || 'Google authentication was rejected.');
+      }
+
+      await completeAuthenticatedSession(data.user, data.token);
+      dispatch(
+        addToast({
+          type: 'success',
+          title: 'Google Sign-In Successful',
+          message: `Welcome, ${data.user.name}!`,
+        })
+      );
+    } catch (err: any) {
+      setError(err.message || 'Google Sign-In failed.');
+    } finally {
+      setOauthLoading(null);
     }
   };
 
@@ -417,85 +505,49 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onNavigate }) => {
     }
   };
 
-  // Real Google OAuth Flow
+  // Google Identity Services ID-token flow
   const handleGoogleAuth = async () => {
     setError(null);
     setOauthLoading('google');
 
     try {
-      if (!oauthStatus.google && !oauthStatus.clientId) {
-        dispatch(
-          addToast({
-            type: 'warning',
-            title: 'Google OAuth Setup Required',
-            message:
-              'GOOGLE_CLIENT_ID is not configured in environment variables. Set GOOGLE_CLIENT_ID to enable live OAuth.',
-          })
+      if (!oauthStatus.google || !oauthStatus.clientId) {
+        throw new Error(
+          oauthStatusError || 'Google Sign-In is not configured. Please contact the site administrator.'
         );
-        setOauthLoading(null);
-        return;
       }
 
-      const clientId = oauthStatus.clientId;
-      const redirectUri = window.location.origin;
-      const scope = encodeURIComponent('email profile openid');
-      const googleAuthUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(
-        redirectUri
-      )}&response_type=token&scope=${scope}&include_granted_scopes=true`;
-
-      const popup = window.open(
-        googleAuthUrl,
-        'google_oauth_popup',
-        'width=500,height=600,menubar=no,status=no,toolbar=no'
-      );
-
-      if (!popup) {
-        throw new Error('Please enable popups in your browser to sign in with Google.');
+      await loadGoogleIdentityServices();
+      const google = window.google;
+      if (!google?.accounts?.id) {
+        throw new Error('Google Sign-In did not initialize correctly. Please try again.');
       }
 
-      const checkPopupTimer = setInterval(() => {
-        try {
-          if (!popup || popup.closed) {
-            clearInterval(checkPopupTimer);
-            setOauthLoading(null);
-            return;
-          }
-          if (popup.location && popup.location.origin === window.location.origin) {
-            const hash = popup.location.hash || '';
-            const params = new URLSearchParams(hash.replace(/^#/, ''));
-            const accessToken = params.get('access_token');
-            const idToken = params.get('id_token');
-            if (accessToken || idToken) {
-              clearInterval(checkPopupTimer);
-              popup.close();
-              fetch('/api/auth/google', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ credential: idToken, accessToken }),
-              })
-                .then((r) => r.json())
-                .then(async (data) => {
-                  if (data.success && data.token && data.user) {
-                    await completeAuthenticatedSession(data.user, data.token);
-                    dispatch(
-                      addToast({
-                        type: 'success',
-                        title: 'Google Sign-In Successful',
-                        message: `Welcome, ${data.user.name}!`,
-                      })
-                    );
-                  } else {
-                    setError(data.error || 'Google authentication rejected by server');
-                  }
-                })
-                .catch((e) => setError(e.message))
-                .finally(() => setOauthLoading(null));
+      if (!googleInitializedRef.current) {
+        google.accounts.id.initialize({
+          client_id: oauthStatus.clientId,
+          callback: (response) => {
+            if (!response.credential) {
+              setOauthLoading(null);
+              setError('Google did not return a valid sign-in credential. Please try again.');
+              return;
             }
-          }
-        } catch {
-          // Cross-origin access
+            void googleCredentialHandlerRef.current(response.credential);
+          },
+          auto_select: false,
+          cancel_on_tap_outside: true,
+        });
+        googleInitializedRef.current = true;
+      }
+
+      google.accounts.id.prompt((notification) => {
+        if (notification.isNotDisplayed()) {
+          setOauthLoading(null);
+          setError('Google Sign-In could not be displayed. Check your browser settings and try again.');
+        } else if (notification.isSkippedMoment() || notification.isDismissedMoment()) {
+          setOauthLoading(null);
         }
-      }, 500);
+      });
     } catch (err: any) {
       setError(err.message || 'Google Sign-In failed');
       setOauthLoading(null);

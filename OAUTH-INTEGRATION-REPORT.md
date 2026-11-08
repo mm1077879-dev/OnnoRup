@@ -1,84 +1,30 @@
-# OAuth Integration Report — Google & Facebook Social Authentication
+# Google Identity Services Integration
 
-**Executive Summary**  
-This document outlines the architecture, security compliance, popup orchestration, and backend token verification mechanisms implemented for Google and Facebook OAuth across Novara Commerce / ShopMax.
+Google sign-in uses Google Identity Services (GIS) ID-token credentials. The frontend receives Google's signed ID token through the GIS callback and sends only that credential to `POST /api/auth/google`. The server verifies it and issues the application's existing JWT. No Google access token is treated as an application login credential.
 
----
+Facebook sign-in remains a separate, unchanged integration.
 
-## 1. Architecture Overview & Iframe Constraints
+## Configuration
 
-In modern sandboxed and preview web environments (including Google Cloud Run and iframe embeds), full-page OAuth redirect loops cause loss of local state, session desynchronization, and broken user experience. Novara Commerce utilizes a hardened **Popup-Based OAuth Architecture** combined with secure cross-window messaging (`window.postMessage`).
+- `GOOGLE_CLIENT_ID` is required in the backend runtime environment. It is returned by `GET /api/auth/oauth-status` for GIS initialization and is also the required token audience on the server. A Client ID is public; never put a Client Secret in frontend code or a `VITE_*` variable.
+- This GIS ID-token flow does not use `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`, or an application OAuth callback route. Those values are not required for Google sign-in in this implementation.
+- In Google Cloud Console, configure the OAuth client as a **Web application** and add each exact website origin under **Authorized JavaScript origins**. For local development, use the actual origin serving the app (commonly `http://localhost:3000`). For deployment, use the configured production origin, including its scheme and any non-default port.
+- **Authorized redirect URIs** are not required for this GIS credential flow. Do not register the website root as a redirect URI to make this flow work.
+- No production domain is inferred here. Add the actual deployed website origin to the Google Cloud Console and set `GOOGLE_CLIENT_ID` in that deployment's backend environment.
 
-```
-+-------------------------------------------------------------+
-|                       Customer Browser                      |
-|                                                             |
-|  [AuthModal]                                                |
-|       |                                                     |
-|       v                                                     |
-|  Opens window.open('/api/auth/google/login' or facebook)    |
-|       |                                                     |
-|       +--------------------------------------------+        |
-|                                                    |        |
-|                                            [Popup Window]   |
-|                                            User authenticates|
-|                                            with Provider    |
-|                                                    |        |
-|                                            Redirects to:    |
-|                                            /auth/callback   |
-|                                                    |        |
-|  Receives window.addEventListener('message') <-----+        |
-|  Extracts { token, user } via postMessage(..., origin)      |
-|  Closes popup window safely                                 |
-|  Dispatches setCredentials & restores pending cart          |
-+-------------------------------------------------------------+
-```
+## Authentication and account handling
 
----
+1. The Google button loads GIS and opens the Google-managed sign-in prompt.
+2. GIS returns an ID-token credential to the frontend callback; there is no app-owned OAuth popup polling, hash parsing, or callback-page redirect.
+3. The backend verifies the token signature, issuer, expiration, audience, required identity claims, and verified email using Google's `google-auth-library`.
+4. An existing account with the same Google subject is authenticated. A matching verified email can be linked to an unlinked existing account without changing its password or role. If that email is linked to a different Google subject, authentication is rejected.
+5. A first-time identity is persisted as a customer account. The backend then returns the normal application JWT and user profile, and the existing authentication session flow restores cart and wishlist state.
 
-## 2. Environment Variables & URL Resolution
+The established email/password login, registration, and JWT session storage remain unchanged.
 
-All OAuth configurations leverage environment-aware dynamic resolution to ensure consistent behavior across development (`ais-dev-*.run.app`), pre-production (`ais-pre-*.run.app`), and custom production domains.
+## Operational checks
 
-### 2.1 Configuration Keys in `.env.example`
-- `GOOGLE_CLIENT_ID`: OAuth 2.0 Client ID generated in Google Cloud Console.
-- `GOOGLE_CLIENT_SECRET`: Client Secret used server-side for code exchange.
-- `GOOGLE_CALLBACK_URL`: Defaults dynamically to `${APP_URL}/api/auth/google/callback`.
-- `FACEBOOK_APP_ID`: Meta App ID from Meta Developers Console.
-- `FACEBOOK_APP_SECRET`: Meta App Secret for access token exchange.
-- `FACEBOOK_CALLBACK_URL`: Defaults dynamically to `${APP_URL}/api/auth/facebook/callback`.
-- `APP_URL`: Base URL of the deployment environment (e.g., `https://ais-dev-vqam6qfveiawni74do6k7q-824151983681.asia-southeast1.run.app`).
-
----
-
-## 3. Server-Side Token Verification & Account Linking
-
-### 3.1 Google Authentication (`POST /api/auth/google` & `/api/auth/google/callback`)
-- **Direct Token Verification**: The backend validates Google Identity tokens (`id_token`) using Google API endpoints or verified OAuth tokeninfo verification.
-- **Payload Extraction**:
-  - `sub`: Unique immutable Google user identifier.
-  - `email`: Normalized lowercase email address.
-  - `name`: User display name.
-  - `picture`: Profile avatar image URL.
-- **Account Linking & Idempotency**:
-  - If a user already exists with matching `email`, their account is automatically linked with `googleId`, preserving order history and saved addresses.
-  - If no account exists, a new user document is created with `role: 'customer'`, and their verified Google identity details.
-
-### 3.2 Facebook Authentication (`POST /api/auth/facebook` & `/api/auth/facebook/callback`)
-- **Graph API Verification**: The backend queries `https://graph.facebook.com/me?fields=id,name,email,picture` with `appsecret_proof` to prevent spoofing.
-- **Fallback Email Generation**: For Facebook accounts lacking public emails (e.g., phone-only registrations), the server derives an isolated pseudo-address `${facebookId}@facebook.user.novara.internal` with a randomly generated hash password.
-
----
-
-## 4. Popup Blocker Handling & Fault Tolerance
-1. **Window Opener Check**: If `window.open` returns `null` (due to aggressive browser popup blockers), the UI immediately prompts the user with an in-modal notification and fallback click-through button.
-2. **Strict Origin Validation**: Messages received via `window.addEventListener('message')` explicitly verify `event.origin === window.location.origin` before processing any authorization payload, guarding against cross-site scripting (XSS) and message injection.
-3. **Timer-Based Polling Fallback**: If `postMessage` fails due to browser cross-origin policy changes, an interval monitor watches `popup.closed` and safely queries `/api/auth/me` to detect completed authorization.
-
----
-
-## 5. Seamless Pending Cart Fulfillment on Social Auth
-Because social OAuth runs via popups, the customer's active window retains its Redux store and `localStorage` snapshot. As soon as the popup signals authorization success:
-1. `AuthModal` detects the updated session.
-2. The customer's uppercase initials avatar (`getUserInitials`) immediately renders in the header.
-3. Any item held in `pendingCartAction` or `novara_pending_cart_v1` is automatically dispatched into the user's cart without requiring re-selection.
+- `GET /api/auth/oauth-status` reports whether `GOOGLE_CLIENT_ID` is configured.
+- The browser origin must exactly match an authorized JavaScript origin in Google Cloud Console.
+- `POST /api/auth/google` accepts only an ID-token `credential`; access-token-only requests are rejected.
+- A production deployment also requires the existing persistent database configuration and `JWT_SECRET`. Live sign-in must be exercised with the deployment's actual Google Cloud Console client; a build alone does not verify Google Console settings or external authentication.

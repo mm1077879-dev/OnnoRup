@@ -347,6 +347,9 @@ describe('4. OAuth & Nagad Payment DFS Verification Architecture', () => {
 
     const wsResult = await verifyGoogleToken({ credential: '   ' });
     assert.equal(wsResult.valid, false);
+
+    const malformedResult = await verifyGoogleToken({ credential: 'not-an-id-token' });
+    assert.equal(malformedResult.valid, false);
   });
 
   it('rejects empty or whitespace-only Facebook OAuth tokens gracefully', async () => {

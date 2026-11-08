@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
+import { OAuth2Client } from 'google-auth-library';
 import { UserModel, IUserAddress, UserRole } from '../models/User';
 import mongoose from 'mongoose';
 import { OtpVerificationModel } from '../models/OtpVerification';
@@ -12,6 +13,7 @@ import { isDbConnected, isProduction, requirePersistentStorage } from '../db';
 import { validateBdLocation } from '../data/bangladeshLocations';
 
 const router = Router();
+const googleAuthClient = new OAuth2Client();
 
 const isValidBangladeshPhone = (phone: string): boolean =>
   /^(?:\+?8801|01)[3-9]\d{8}$/.test(phone.replace(/[\s-]/g, ''));
@@ -1332,9 +1334,9 @@ router.get('/oauth-status', (req: Request, res: Response) => {
 });
 
 /**
- * Server-side Google ID Token or Access Token Verification
+ * Verifies a Google Identity Services ID token against the configured client ID.
  */
-export async function verifyGoogleToken(params: { credential?: string; accessToken?: string }): Promise<{
+export async function verifyGoogleToken(params: { credential?: string }): Promise<{
   valid: boolean;
   email?: string;
   name?: string;
@@ -1342,79 +1344,46 @@ export async function verifyGoogleToken(params: { credential?: string; accessTok
   picture?: string;
   error?: string;
 }> {
-  const { credential, accessToken } = params;
-
-  if (credential) {
-    try {
-      const res = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(credential)}`);
-      const payload: any = await res.json();
-
-      if (!res.ok || payload.error || payload.error_description) {
-        return { valid: false, error: payload.error_description || payload.error || 'Invalid Google ID token' };
-      }
-
-      // Validate issuer
-      const validIssuers = ['accounts.google.com', 'https://accounts.google.com'];
-      if (!validIssuers.includes(payload.iss)) {
-        return { valid: false, error: `Invalid Google token issuer: ${payload.iss}` };
-      }
-
-      // Validate audience if client ID configured
-      if (process.env.GOOGLE_CLIENT_ID && payload.aud !== process.env.GOOGLE_CLIENT_ID) {
-        return { valid: false, error: 'Google token audience mismatch' };
-      }
-
-      // Check expiry
-      const nowSeconds = Math.floor(Date.now() / 1000);
-      if (payload.exp && parseInt(payload.exp, 10) < nowSeconds) {
-        return { valid: false, error: 'Google ID token has expired' };
-      }
-
-      // Email verified check
-      if (payload.email_verified !== 'true' && payload.email_verified !== true) {
-        return { valid: false, error: 'Google account email is not verified' };
-      }
-
-      return {
-        valid: true,
-        email: payload.email.toLowerCase().trim(),
-        name: payload.name || payload.email.split('@')[0],
-        googleId: payload.sub,
-        picture: payload.picture,
-      };
-    } catch (err: any) {
-      return { valid: false, error: err.message || 'Google token validation request failed' };
-    }
+  const credential = params.credential?.trim();
+  if (!credential) {
+    return { valid: false, error: 'Google credential (ID token) is required.' };
   }
 
-  if (accessToken) {
-    try {
-      const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      const payload: any = await res.json();
-
-      if (!res.ok || payload.error) {
-        return { valid: false, error: payload.error_description || payload.error || 'Invalid Google access token' };
-      }
-
-      if (payload.email_verified === false) {
-        return { valid: false, error: 'Google account email is not verified' };
-      }
-
-      return {
-        valid: true,
-        email: (payload.email || '').toLowerCase().trim(),
-        name: payload.name || payload.given_name || 'Google User',
-        googleId: payload.sub,
-        picture: payload.picture,
-      };
-    } catch (err: any) {
-      return { valid: false, error: err.message || 'Google userinfo request failed' };
-    }
+  const clientId = process.env.GOOGLE_CLIENT_ID?.trim();
+  if (!clientId) {
+    return { valid: false, error: 'Google authentication is not configured.' };
   }
 
-  return { valid: false, error: 'Neither Google credential (id_token) nor accessToken was provided' };
+  try {
+    const ticket = await googleAuthClient.verifyIdToken({ idToken: credential, audience: clientId });
+    const payload = ticket.getPayload();
+    const nowSeconds = Math.floor(Date.now() / 1000);
+
+    if (
+      !payload ||
+      !['accounts.google.com', 'https://accounts.google.com'].includes(payload.iss || '') ||
+      payload.aud !== clientId ||
+      !payload.sub ||
+      !payload.email ||
+      payload.email_verified !== true ||
+      !payload.exp ||
+      payload.exp <= nowSeconds ||
+      !payload.iat ||
+      payload.iat > nowSeconds + 60
+    ) {
+      return { valid: false, error: 'Google ID token is invalid or its email is not verified.' };
+    }
+
+    return {
+      valid: true,
+      email: payload.email.toLowerCase().trim(),
+      name: payload.name || payload.email.split('@')[0],
+      googleId: payload.sub,
+      picture: payload.picture,
+    };
+  } catch {
+    return { valid: false, error: 'Google ID token verification failed.' };
+  }
 }
 
 /**
@@ -1479,18 +1448,18 @@ router.post('/google', authLimiter, async (req: Request, res: Response) => {
     if (!requirePersistentStorage(res, 'Google authentication')) {
       return;
     }
-    const { credential, accessToken } = req.body;
+    const { credential } = req.body;
 
-    if (!credential && !accessToken) {
+    if (typeof credential !== 'string' || !credential.trim() || credential.length > 16_384) {
       res.status(400).json({
         success: false,
-        error: 'Google ID token (credential) or accessToken is required.',
+        error: 'A valid Google ID token credential is required.',
       });
       return;
     }
 
-    const verification = await verifyGoogleToken({ credential, accessToken });
-    if (!verification.valid || !verification.email) {
+    const verification = await verifyGoogleToken({ credential });
+    if (!verification.valid || !verification.email || !verification.googleId) {
       res.status(401).json({
         success: false,
         error: verification.error || 'Google authentication failed. Token verification rejected.',
@@ -1502,11 +1471,21 @@ router.post('/google', authLimiter, async (req: Request, res: Response) => {
     let user: any = null;
 
     if (isDbConnected()) {
-      user = await UserModel.findOne({ email: normalizedEmail });
+      user = await UserModel.findOne({ googleId: verification.googleId });
+
+      if (!user) {
+        user = await UserModel.findOne({ email: normalizedEmail });
+        if (user?.googleId && user.googleId !== verification.googleId) {
+          res.status(409).json({
+            success: false,
+            error: 'This email is already linked to a different Google account.',
+          });
+          return;
+        }
+      }
 
       if (user) {
-        // Link googleId and avatar if not yet linked
-        if (!user.googleId && verification.googleId) user.googleId = verification.googleId;
+        if (!user.googleId) user.googleId = verification.googleId;
         if (!user.avatarUrl && verification.picture) user.avatarUrl = verification.picture;
         user.isVerified = true;
         await user.save();
@@ -1514,22 +1493,52 @@ router.post('/google', authLimiter, async (req: Request, res: Response) => {
         // Create new customer account safely
         const randomPassword = crypto.randomBytes(24).toString('hex');
         const passwordHash = await bcrypt.hash(randomPassword, 10);
-        user = await UserModel.create({
-          name: verification.name || normalizedEmail.split('@')[0],
-          email: normalizedEmail,
-          passwordHash,
-          role: 'customer',
-          addresses: [],
-          isVerified: true,
-          googleId: verification.googleId,
-          avatarUrl: verification.picture,
-          authProvider: 'google',
-        });
+        try {
+          user = await UserModel.create({
+            name: verification.name || normalizedEmail.split('@')[0],
+            email: normalizedEmail,
+            passwordHash,
+            role: 'customer',
+            addresses: [],
+            isVerified: true,
+            googleId: verification.googleId,
+            avatarUrl: verification.picture,
+            authProvider: 'google',
+          });
+        } catch (error: any) {
+          if (error?.code !== 11000) throw error;
+
+          user =
+            (await UserModel.findOne({ googleId: verification.googleId })) ||
+            (await UserModel.findOne({ email: normalizedEmail }));
+          if (!user || (user.googleId && user.googleId !== verification.googleId)) {
+            res.status(409).json({
+              success: false,
+              error: 'This email is already linked to a different account.',
+            });
+            return;
+          }
+          if (!user.googleId) user.googleId = verification.googleId;
+          if (!user.avatarUrl && verification.picture) user.avatarUrl = verification.picture;
+          user.isVerified = true;
+          await user.save();
+        }
       }
     } else {
-      user = inMemoryUsers.find((u) => u.email === normalizedEmail);
+      user = inMemoryUsers.find((u) => u.googleId === verification.googleId);
+      if (!user) {
+        user = inMemoryUsers.find((u) => u.email === normalizedEmail);
+        if (user?.googleId && user.googleId !== verification.googleId) {
+          res.status(409).json({
+            success: false,
+            error: 'This email is already linked to a different Google account.',
+          });
+          return;
+        }
+      }
+
       if (user) {
-        if (!user.googleId && verification.googleId) user.googleId = verification.googleId;
+        if (!user.googleId) user.googleId = verification.googleId;
         if (!user.avatarUrl && verification.picture) user.avatarUrl = verification.picture;
         user.isVerified = true;
       } else {
@@ -1576,7 +1585,7 @@ router.post('/google', authLimiter, async (req: Request, res: Response) => {
     });
   } catch (err: any) {
     console.error('Google OAuth error:', err);
-    res.status(500).json({ success: false, error: err.message || 'Google authentication failed' });
+    res.status(500).json({ success: false, error: 'Google authentication failed.' });
   }
 });
 
