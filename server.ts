@@ -49,7 +49,7 @@ async function startServer() {
     // Content Security Policy
     res.setHeader(
       'Content-Security-Policy',
-      `default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://accounts.google.com https://connect.facebook.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https: blob:; connect-src 'self' https: wss:${isProduction ? '' : ' ws://localhost:24678'}; frame-src 'self' https://accounts.google.com https://www.facebook.com;`
+      `default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://accounts.google.com/gsi/client https://connect.facebook.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com/gsi/style; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: https: blob:; connect-src 'self' https: wss:${isProduction ? '' : ' ws://localhost:24678'} https://accounts.google.com/gsi/; frame-src 'self' https://accounts.google.com/gsi/ https://www.facebook.com;`
     );
     next();
   });

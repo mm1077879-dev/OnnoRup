@@ -14,7 +14,7 @@ Facebook sign-in remains a separate, unchanged integration.
 
 ## Authentication and account handling
 
-1. The Google button loads GIS and opens the Google-managed sign-in prompt.
+1. The auth modal loads GIS and renders Google's interactive sign-in button. Clicking it returns an ID-token credential through the GIS callback; sign-in does not depend on the One Tap prompt.
 2. GIS returns an ID-token credential to the frontend callback; there is no app-owned OAuth popup polling, hash parsing, or callback-page redirect.
 3. The backend verifies the token signature, issuer, expiration, audience, required identity claims, and verified email using Google's `google-auth-library`.
 4. An existing account with the same Google subject is authenticated. A matching verified email can be linked to an unlinked existing account without changing its password or role. If that email is linked to a different Google subject, authentication is rejected.

@@ -29,12 +29,6 @@ interface GoogleCredentialResponse {
   credential?: string;
 }
 
-interface GooglePromptNotification {
-  isNotDisplayed(): boolean;
-  isSkippedMoment(): boolean;
-  isDismissedMoment(): boolean;
-}
-
 interface GoogleIdentityApi {
   initialize(options: {
     client_id: string;
@@ -42,7 +36,15 @@ interface GoogleIdentityApi {
     auto_select: boolean;
     cancel_on_tap_outside: boolean;
   }): void;
-  prompt(callback?: (notification: GooglePromptNotification) => void): void;
+  renderButton(parent: HTMLElement, options: {
+    type?: 'standard' | 'icon';
+    theme?: 'outline' | 'filled_blue' | 'filled_black';
+    size?: 'large' | 'medium' | 'small';
+    text?: 'signin_with' | 'signup_with' | 'continue_with' | 'signin';
+    shape?: 'rectangular' | 'pill' | 'circle' | 'square';
+    logo_alignment?: 'left' | 'center';
+    width?: number;
+  }): void;
 }
 
 declare global {
@@ -118,6 +120,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onNavigate }) => {
 
   const otpInputRefs = useRef<(HTMLInputElement | null)[]>([]);
   const googleInitializedRef = useRef(false);
+  const googleButtonContainerRef = useRef<HTMLDivElement | null>(null);
   const googleCredentialHandlerRef = useRef<(credential: string) => Promise<void>>(async () => {});
 
   // Query OAuth provider configuration status on mount
@@ -148,6 +151,71 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onNavigate }) => {
     setDevCodeHint(null);
     setOtpDigits(['', '', '', '', '', '']);
   }, [authModalMode, isAuthModalOpen]);
+
+  useEffect(() => {
+    if (
+      !isAuthModalOpen ||
+      authModalMode === 'forgot' ||
+      !oauthStatus.google ||
+      !oauthStatus.clientId ||
+      !googleButtonContainerRef.current
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    const clientId = oauthStatus.clientId;
+    const container = googleButtonContainerRef.current;
+    container.replaceChildren();
+
+    void loadGoogleIdentityServices()
+      .then(() => {
+        if (cancelled) return;
+
+        const google = window.google;
+        if (!google?.accounts?.id) {
+          throw new Error('Google Sign-In did not initialize correctly. Please try again.');
+        }
+
+        if (!googleInitializedRef.current) {
+          google.accounts.id.initialize({
+            client_id: clientId,
+            callback: (response) => {
+              if (!response.credential) {
+                setOauthLoading(null);
+                setError('Google did not return a valid sign-in credential. Please try again.');
+                return;
+              }
+              setOauthLoading('google');
+              void googleCredentialHandlerRef.current(response.credential);
+            },
+            auto_select: false,
+            cancel_on_tap_outside: true,
+          });
+          googleInitializedRef.current = true;
+        }
+
+        google.accounts.id.renderButton(container, {
+          type: 'standard',
+          theme: 'outline',
+          size: 'large',
+          text: authModalMode === 'register' ? 'signup_with' : 'continue_with',
+          shape: 'pill',
+          logo_alignment: 'left',
+          width: container.clientWidth || 180,
+        });
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : 'Google Sign-In could not be loaded. Please try again.');
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      container.replaceChildren();
+    };
+  }, [authModalMode, isAuthModalOpen, oauthStatus.clientId, oauthStatus.google]);
 
   // Cooldown countdown timer
   useEffect(() => {
@@ -502,55 +570,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onNavigate }) => {
       setError(err.message || 'Invalid credentials');
     } finally {
       setLoading(false);
-    }
-  };
-
-  // Google Identity Services ID-token flow
-  const handleGoogleAuth = async () => {
-    setError(null);
-    setOauthLoading('google');
-
-    try {
-      if (!oauthStatus.google || !oauthStatus.clientId) {
-        throw new Error(
-          oauthStatusError || 'Google Sign-In is not configured. Please contact the site administrator.'
-        );
-      }
-
-      await loadGoogleIdentityServices();
-      const google = window.google;
-      if (!google?.accounts?.id) {
-        throw new Error('Google Sign-In did not initialize correctly. Please try again.');
-      }
-
-      if (!googleInitializedRef.current) {
-        google.accounts.id.initialize({
-          client_id: oauthStatus.clientId,
-          callback: (response) => {
-            if (!response.credential) {
-              setOauthLoading(null);
-              setError('Google did not return a valid sign-in credential. Please try again.');
-              return;
-            }
-            void googleCredentialHandlerRef.current(response.credential);
-          },
-          auto_select: false,
-          cancel_on_tap_outside: true,
-        });
-        googleInitializedRef.current = true;
-      }
-
-      google.accounts.id.prompt((notification) => {
-        if (notification.isNotDisplayed()) {
-          setOauthLoading(null);
-          setError('Google Sign-In could not be displayed. Check your browser settings and try again.');
-        } else if (notification.isSkippedMoment() || notification.isDismissedMoment()) {
-          setOauthLoading(null);
-        }
-      });
-    } catch (err: any) {
-      setError(err.message || 'Google Sign-In failed');
-      setOauthLoading(null);
     }
   };
 
@@ -1032,37 +1051,26 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onNavigate }) => {
         <div className="mt-5 pt-4 border-t border-gray-100">
           <div className="text-[11px] text-gray-400 text-center mb-2">Or continue with</div>
           <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={handleGoogleAuth}
-              disabled={oauthLoading !== null}
-              className="flex items-center justify-center gap-2 py-2 px-3 border border-gray-200 rounded-xl text-xs font-medium text-gray-700 hover:bg-gray-50 transition cursor-pointer disabled:opacity-50"
-              title={oauthStatus?.google ? "Continue with Google" : "Google Client ID required in environment"}
-            >
-              {oauthLoading === 'google' ? (
-                <div className="w-3.5 h-3.5 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin" />
+            <div className="flex min-h-10 items-center justify-center">
+              {oauthStatus.google && oauthStatus.clientId ? (
+                <div ref={googleButtonContainerRef} className="w-full" />
               ) : (
-                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24">
-                  <path
-                    fill="#EA4335"
-                    d="M12 5c1.6 0 3 .6 4.1 1.6l3.1-3.1C17.3 1.7 14.8 1 12 1 7.5 1 3.7 3.6 1.9 7.3l3.7 2.9C6.5 7.4 9 5 12 5z"
-                  />
-                  <path
-                    fill="#4285F4"
-                    d="M23.5 12.3c0-.8-.1-1.7-.2-2.3H12v4.5h6.5c-.3 1.5-1.1 2.8-2.4 3.7l3.7 2.9c2.2-2 3.7-5.1 3.7-8.8z"
-                  />
-                  <path
-                    fill="#FBBC05"
-                    d="M5.6 14.8c-.2-.7-.4-1.5-.4-2.8s.2-2.1.4-2.8L1.9 6.3C.7 8.7 0 10.8 0 12s.7 3.3 1.9 5.7l3.7-2.9z"
-                  />
-                  <path
-                    fill="#34A853"
-                    d="M12 23c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3 0-5.5-2-6.4-4.8L1.9 16.4C3.7 20.4 7.5 23 12 23z"
-                  />
-                </svg>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setError(
+                      oauthStatusError ||
+                        'Google Sign-In is not configured. Please contact the site administrator.'
+                    )
+                  }
+                  className="w-full flex items-center justify-center gap-2 py-2 px-3 border border-gray-200 rounded-xl text-xs font-medium text-gray-700 hover:bg-gray-50 transition cursor-pointer"
+                  title="Google Client ID required in environment"
+                >
+                  <span className="font-bold text-[#4285F4]">G</span>
+                  <span>{authModalMode === 'register' ? 'Sign up with Google' : 'Continue with Google'}</span>
+                </button>
               )}
-              <span>Google</span>
-            </button>
+            </div>
             <button
               type="button"
               onClick={handleFacebookAuth}
