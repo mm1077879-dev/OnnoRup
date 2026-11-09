@@ -1,10 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { ProductCard } from '../components/ui/ProductCard';
 import { SeedProduct } from '../../server/data/initialData';
 import { Filter, SlidersHorizontal, ArrowUpDown, X, Tag } from 'lucide-react';
 import { useDelayedSkeleton } from '../hooks/useDelayedSkeleton';
 import { ShopSkeleton } from '../components/skeletons/ShopSkeleton';
 import { formatBDT } from '../utils/currency';
+import { ProductCardSkeleton } from '../components/skeletons/ProductCardSkeleton';
+
+const PRODUCT_PAGE_SIZE = 20;
 
 interface ShopPageProps {
   initialCategory?: string;
@@ -19,13 +22,24 @@ export const ShopPage: React.FC<ShopPageProps> = ({
 }) => {
   const [products, setProducts] = useState<SeedProduct[]>([]);
   const [categories, setCategories] = useState<any[]>([]);
+  const [brandOptions, setBrandOptions] = useState<string[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string>(initialCategory || 'all');
   const [selectedBrand, setSelectedBrand] = useState<string>('all');
   const [priceRange, setPriceRange] = useState<number>(100000);
   const [sortOption, setSortOption] = useState<string>('popular');
   const [searchQuery, setSearchQuery] = useState<string>(initialQuery || '');
   const [loading, setLoading] = useState<boolean>(true);
+  const [loadingMore, setLoadingMore] = useState<boolean>(false);
+  const [hasNextPage, setHasNextPage] = useState<boolean>(false);
+  const [initialError, setInitialError] = useState<string | null>(null);
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
+  const [retryInitial, setRetryInitial] = useState<number>(0);
   const [mobileFilterOpen, setMobileFilterOpen] = useState<boolean>(false);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const requestIdRef = useRef<number>(0);
+  const activeControllerRef = useRef<AbortController | null>(null);
+  const nextPageRef = useRef<number>(2);
+  const loadingMoreRef = useRef<boolean>(false);
 
   const normalizeCategoryKey = (value?: string) =>
     (value || '')
@@ -46,89 +60,159 @@ export const ShopPage: React.FC<ShopPageProps> = ({
 
   const selectedCategoryDisplay = getActiveCategory()?.name || (selectedCategory === 'all' ? 'All Categories' : selectedCategory);
 
-  const getCategoryMatch = (value?: string) => {
-    const productCategory = normalizeCategoryKey(value);
-    if (!productCategory || selectedCategory === 'all') return true;
-
-    const normalizedSelected = normalizeCategoryKey(selectedCategory);
-    const activeCategory = getActiveCategory();
-    if (!activeCategory) {
-      return productCategory === normalizedSelected;
-    }
-
-    const activeCategorySlug = normalizeCategoryKey(activeCategory.slug || activeCategory.name);
-    const activeCategoryName = normalizeCategoryKey(activeCategory.name);
-    return productCategory === normalizedSelected || productCategory === activeCategorySlug || productCategory === activeCategoryName;
-  };
-
   useEffect(() => {
     if (initialCategory !== undefined) setSelectedCategory(initialCategory);
     if (initialQuery !== undefined) setSearchQuery(initialQuery);
   }, [initialCategory, initialQuery]);
 
   useEffect(() => {
-    let isCurrentRequest = true;
-
-    async function fetchData() {
-      setLoading(true);
+    const controller = new AbortController();
+    let isMounted = true;
+    async function fetchCategories() {
       try {
-        const catRes = await fetch('/api/categories');
+        const catRes = await fetch('/api/categories', { signal: controller.signal });
+        if (!catRes.ok) throw new Error(`Could not load categories (${catRes.status}).`);
         const catData = await catRes.json();
-        const categoryList = catData.success ? catData.data : categories;
-        if (isCurrentRequest && catData.success) setCategories(catData.data);
-
-        const activeCategory = categoryList.find((category: any) => {
-          const normalizedCategory = normalizeCategoryKey(category.slug || category.name);
-          return normalizedCategory === normalizeCategoryKey(selectedCategory);
-        });
-        const categoryQueryValue = activeCategory?.name || (selectedCategory === 'all' ? '' : selectedCategory);
-
-        let list: SeedProduct[] = [];
-
-        if (searchQuery.trim()) {
-          const searchRes = await fetch(
-            `/api/products/search?q=${encodeURIComponent(searchQuery.trim())}&limit=50&sort=${encodeURIComponent(sortOption)}${categoryQueryValue ? `&category=${encodeURIComponent(categoryQueryValue)}` : ''}`
-          );
-          const searchData = await searchRes.json();
-          if (searchData.success && Array.isArray(searchData.data)) {
-            list = searchData.data;
-          }
-        } else {
-          let url = `/api/products?limit=50`;
-          if (categoryQueryValue) url += `&category=${encodeURIComponent(categoryQueryValue)}`;
-          if (selectedBrand && selectedBrand !== 'all') url += `&brand=${encodeURIComponent(selectedBrand)}`;
-          if (sortOption) url += `&sort=${encodeURIComponent(sortOption)}`;
-
-          const prodRes = await fetch(url);
-          const prodData = await prodRes.json();
-          if (prodData.success && Array.isArray(prodData.data)) {
-            list = prodData.data;
-          }
+        if (!catData.success || !Array.isArray(catData.data)) {
+          throw new Error(catData.error || 'Could not load categories.');
         }
-
-        if (selectedCategory && selectedCategory !== 'all') {
-          list = list.filter((product) => getCategoryMatch(product.category));
-        }
-        if (selectedBrand && selectedBrand !== 'all') {
-          list = list.filter((p) => p.brand?.toLowerCase() === selectedBrand.toLowerCase());
-        }
-
-        list = list.filter((p) => (p.salePrice || p.price) <= priceRange);
-        if (isCurrentRequest) setProducts(list);
+        if (isMounted) setCategories(catData.data);
       } catch (err) {
-        if (isCurrentRequest) console.error('Error loading shop products', err);
-      } finally {
-        if (isCurrentRequest) setLoading(false);
+        if (!controller.signal.aborted) console.error('Error loading shop categories', err);
       }
     }
-    fetchData();
-
+    void fetchCategories();
     return () => {
-      isCurrentRequest = false;
+      isMounted = false;
+      controller.abort();
     };
-  }, [selectedCategory, selectedBrand, sortOption, priceRange, searchQuery]);
+  }, []);
 
-  const brands = Array.from(new Set(products.map((p) => p.brand).filter(Boolean)));
+  const buildProductsUrl = (page: number) => {
+    const params = new URLSearchParams({
+      page: String(page),
+      limit: String(PRODUCT_PAGE_SIZE),
+      sort: sortOption,
+    });
+    if (selectedCategory !== 'all') params.set('category', selectedCategory);
+    if (selectedBrand !== 'all') params.set('brand', selectedBrand);
+    params.set('effectiveMaxPrice', String(priceRange));
+    if (searchQuery.trim()) {
+      params.set('q', searchQuery.trim());
+      return `/api/products/search?${params.toString()}`;
+    }
+    return `/api/products?${params.toString()}`;
+  };
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const requestId = ++requestIdRef.current;
+    activeControllerRef.current = controller;
+    nextPageRef.current = 2;
+    loadingMoreRef.current = false;
+    setProducts([]);
+    setBrandOptions([]);
+    setHasNextPage(false);
+    setLoading(true);
+    setLoadingMore(false);
+    setInitialError(null);
+    setLoadMoreError(null);
+
+    async function fetchFirstPage() {
+      try {
+        const response = await fetch(buildProductsUrl(1), { signal: controller.signal });
+        if (!response.ok) throw new Error(`Could not load products (${response.status}).`);
+        const result = await response.json();
+        if (!result.success || !Array.isArray(result.data)) {
+          throw new Error(result.error || 'The product response was invalid.');
+        }
+        if (controller.signal.aborted || requestId !== requestIdRef.current) return;
+
+        const firstPage = result.data as SeedProduct[];
+        setProducts(firstPage);
+        setBrandOptions(Array.isArray(result.brands)
+          ? result.brands.filter((brand: unknown): brand is string => typeof brand === 'string')
+          : [...new Set(firstPage.map((product) => product.brand).filter(Boolean))]);
+        setHasNextPage(typeof result.pagination?.hasNextPage === 'boolean'
+          ? result.pagination.hasNextPage
+          : firstPage.length === PRODUCT_PAGE_SIZE);
+      } catch (err) {
+        if (!controller.signal.aborted && requestId === requestIdRef.current) {
+          setInitialError(err instanceof Error ? err.message : 'Could not load products.');
+          console.error('Error loading shop products', err);
+        }
+      } finally {
+        if (!controller.signal.aborted && requestId === requestIdRef.current) setLoading(false);
+      }
+    }
+
+    void fetchFirstPage();
+    return () => {
+      controller.abort();
+      if (requestId === requestIdRef.current) requestIdRef.current += 1;
+    };
+  }, [selectedCategory, selectedBrand, sortOption, priceRange, searchQuery, retryInitial]);
+
+  const loadMore = useCallback(async () => {
+    if (!hasNextPage || loading || loadingMoreRef.current) return;
+    const controller = activeControllerRef.current;
+    const requestId = requestIdRef.current;
+    if (!controller || controller.signal.aborted) return;
+
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+    setLoadMoreError(null);
+    const page = nextPageRef.current;
+
+    try {
+      const response = await fetch(buildProductsUrl(page), { signal: controller.signal });
+      if (!response.ok) throw new Error(`Could not load more products (${response.status}).`);
+      const result = await response.json();
+      if (!result.success || !Array.isArray(result.data)) {
+        throw new Error(result.error || 'The product response was invalid.');
+      }
+      if (controller.signal.aborted || requestId !== requestIdRef.current) return;
+
+      const nextProducts = result.data as SeedProduct[];
+      setProducts((current) => {
+        const existingIds = new Set(current.map((product) => product.id));
+        const uniqueProducts = nextProducts.filter((product) => {
+          if (existingIds.has(product.id)) return false;
+          existingIds.add(product.id);
+          return true;
+        });
+        return [...current, ...uniqueProducts];
+      });
+      nextPageRef.current = page + 1;
+      setHasNextPage(typeof result.pagination?.hasNextPage === 'boolean'
+        ? result.pagination.hasNextPage
+        : nextProducts.length === PRODUCT_PAGE_SIZE);
+    } catch (err) {
+      if (!controller.signal.aborted && requestId === requestIdRef.current) {
+        setLoadMoreError(err instanceof Error ? err.message : 'Could not load more products.');
+        console.error('Error loading more shop products', err);
+      }
+    } finally {
+      if (requestId === requestIdRef.current) {
+        loadingMoreRef.current = false;
+        setLoadingMore(false);
+      }
+    }
+  }, [hasNextPage, loading, selectedCategory, selectedBrand, sortOption, priceRange, searchQuery]);
+
+  useEffect(() => {
+    if (!hasNextPage || loading || loadingMore || loadMoreError || !sentinelRef.current) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) void loadMore();
+      },
+      { rootMargin: '500px 0px' }
+    );
+    observer.observe(sentinelRef.current);
+    return () => observer.disconnect();
+  }, [hasNextPage, loading, loadingMore, loadMoreError, loadMore]);
+
+  const brands = brandOptions;
 
   const handleClearFilters = () => {
     setSelectedCategory('all');
@@ -297,11 +381,16 @@ export const ShopPage: React.FC<ShopPageProps> = ({
 
         {/* Product Grid Area */}
         <main className="md:col-span-3">
-          {loading ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
-              {[...Array(6)].map((_, i) => (
-                <div key={i} className="h-72 rounded-2xl bg-gray-100 animate-pulse" />
-              ))}
+          {initialError ? (
+            <div role="alert" className="text-center py-16 bg-white rounded-2xl border border-gray-100 p-8 shadow-2xs">
+              <h3 className="text-base font-bold text-gray-800">Products could not be loaded</h3>
+              <p className="text-xs text-gray-500 mt-1 mb-5">{initialError}</p>
+              <button
+                onClick={() => setRetryInitial((attempt) => attempt + 1)}
+                className="px-5 py-2.5 bg-[#00875a] hover:bg-[#00724c] text-white text-xs font-bold rounded-xl transition"
+              >
+                Try Again
+              </button>
             </div>
           ) : products.length === 0 ? (
             <div className="text-center py-20 bg-white rounded-2xl border border-gray-100 p-8 shadow-2xs">
@@ -326,7 +415,30 @@ export const ShopPage: React.FC<ShopPageProps> = ({
                   onViewProduct={onViewProduct}
                 />
               ))}
+              {loadingMore && [...Array(6)].map((_, index) => (
+                <ProductCardSkeleton key={`loading-${index}`} />
+              ))}
             </div>
+          )}
+          {products.length > 0 && (
+            <>
+              <div ref={sentinelRef} className="h-1" aria-hidden="true" />
+              {loadMoreError && (
+                <div role="alert" className="text-center py-6">
+                  <p className="text-sm text-rose-700 mb-3">{loadMoreError}</p>
+                  <button
+                    onClick={() => {
+                      setLoadMoreError(null);
+                      void loadMore();
+                    }}
+                    className="px-4 py-2 bg-[#00875a] hover:bg-[#00724c] text-white text-xs font-bold rounded-xl transition"
+                  >
+                    Retry Loading Products
+                  </button>
+                </div>
+              )}
+              {loadingMore && <p className="sr-only" aria-live="polite">Loading more products</p>}
+            </>
           )}
         </main>
       </div>

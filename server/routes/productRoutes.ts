@@ -127,6 +127,36 @@ function matchesCategoryValue(value: string | undefined, categoryValue: string) 
   });
 }
 
+function addEffectivePriceFilter(filter: Record<string, any>, minPrice?: number, maxPrice?: number) {
+  const salePrice: Record<string, number> = { $gt: 0 };
+  const regularPrice: Record<string, number> = {};
+
+  if (minPrice !== undefined) {
+    salePrice.$gte = minPrice;
+    regularPrice.$gte = minPrice;
+  }
+  if (maxPrice !== undefined) {
+    salePrice.$lte = maxPrice;
+    regularPrice.$lte = maxPrice;
+  }
+
+  const noSalePrice = {
+    $or: [
+      { salePrice: { $exists: false } },
+      { salePrice: null },
+      { salePrice: { $lte: 0 } },
+    ],
+  };
+  const effectivePriceCondition = {
+    $or: [
+      { salePrice },
+      { $and: [{ price: regularPrice }, noSalePrice] },
+    ],
+  };
+
+  filter.$and = [...(filter.$and || []), effectivePriceCondition];
+}
+
 // List products with filtering, sorting, cursor or offset pagination, and lean projection
 router.get('/', async (req: Request, res: Response) => {
   try {
@@ -144,12 +174,14 @@ router.get('/', async (req: Request, res: Response) => {
       includeAll,
       includeDetails,
       page = '1',
-      limit = '12',
+      limit = '20',
       cursor,
+      effectiveMinPrice,
+      effectiveMaxPrice,
     } = req.query;
 
     const pageNum = Math.max(1, parseInt(page as string, 10) || 1);
-    const limitNum = Math.min(100, Math.max(1, parseInt(limit as string, 10) || 12));
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit as string, 10) || 20));
 
     if (isDbConnected()) {
       const filter: any = {};
@@ -198,10 +230,6 @@ router.get('/', async (req: Request, res: Response) => {
           ];
         }
       }
-      if (brand) {
-        const safeBrand = escapeRegex(brand as string);
-        filter.brand = new RegExp(`^${safeBrand}$`, 'i');
-      }
       if (isPopular === 'true') filter.isPopular = true;
       if (isBestSeller === 'true') filter.isBestSeller = true;
       if (isFeatured === 'true') filter.isFeatured = true;
@@ -211,6 +239,25 @@ router.get('/', async (req: Request, res: Response) => {
         filter.price = {};
         if (minPrice) filter.price.$gte = parseFloat(minPrice as string);
         if (maxPrice) filter.price.$lte = parseFloat(maxPrice as string);
+      }
+
+      const minEffectivePrice = Number(effectiveMinPrice);
+      const maxEffectivePrice = Number(effectiveMaxPrice);
+      if (effectiveMinPrice !== undefined || effectiveMaxPrice !== undefined) {
+        addEffectivePriceFilter(
+          filter,
+          Number.isFinite(minEffectivePrice) ? minEffectivePrice : undefined,
+          Number.isFinite(maxEffectivePrice) ? maxEffectivePrice : undefined
+        );
+      }
+
+      const brandFilter = { ...filter };
+      const availableBrands = pageNum === 1
+        ? await ProductModel.distinct('brand', brandFilter).exec()
+        : undefined;
+      if (brand) {
+        const safeBrand = escapeRegex(brand as string);
+        filter.brand = new RegExp(`^${safeBrand}$`, 'i');
       }
 
       // Cursor-based pagination for large datasets
@@ -250,7 +297,9 @@ router.get('/', async (req: Request, res: Response) => {
           limit: limitNum,
           totalPages: Math.ceil(total / limitNum),
           nextCursor,
+          hasNextPage: pageNum * limitNum < total,
         },
+        ...(availableBrands ? { brands: availableBrands.filter(Boolean).sort() } : {}),
       });
       return;
     }
@@ -266,9 +315,6 @@ router.get('/', async (req: Request, res: Response) => {
     if (category && category !== 'all') {
       filtered = filtered.filter((p) => matchesCategoryValue(p.category, String(category)) || matchesCategoryValue(p.subcategory, String(category)));
     }
-    if (brand) {
-      filtered = filtered.filter((p) => p.brand.toLowerCase() === (brand as string).toLowerCase());
-    }
     if (isPopular === 'true') filtered = filtered.filter((p) => p.isPopular);
     if (isBestSeller === 'true') filtered = filtered.filter((p) => p.isBestSeller);
     if (isFeatured === 'true') filtered = filtered.filter((p) => p.isFeatured);
@@ -283,14 +329,32 @@ router.get('/', async (req: Request, res: Response) => {
       filtered = filtered.filter((p) => (p.salePrice || p.price) <= max);
     }
 
+    const minEffectivePrice = Number(effectiveMinPrice);
+    const maxEffectivePrice = Number(effectiveMaxPrice);
+    if (effectiveMinPrice !== undefined && Number.isFinite(minEffectivePrice)) {
+      filtered = filtered.filter((p) => (p.salePrice || p.price) >= minEffectivePrice);
+    }
+    if (effectiveMaxPrice !== undefined && Number.isFinite(maxEffectivePrice)) {
+      filtered = filtered.filter((p) => (p.salePrice || p.price) <= maxEffectivePrice);
+    }
+
+    const availableBrands = pageNum === 1
+      ? [...new Set(filtered.map((product) => product.brand).filter(Boolean))].sort()
+      : undefined;
+    if (brand) {
+      filtered = filtered.filter((p) => p.brand.toLowerCase() === (brand as string).toLowerCase());
+    }
+
     if (sort === 'price_asc') {
-      filtered.sort((a, b) => (a.salePrice || a.price) - (b.salePrice || b.price));
+      filtered.sort((a, b) => (a.salePrice || a.price) - (b.salePrice || b.price) || a.id.localeCompare(b.id));
     } else if (sort === 'price_desc') {
-      filtered.sort((a, b) => (b.salePrice || b.price) - (a.salePrice || a.price));
+      filtered.sort((a, b) => (b.salePrice || b.price) - (a.salePrice || a.price) || a.id.localeCompare(b.id));
     } else if (sort === 'rating') {
-      filtered.sort((a, b) => b.ratingAverage - a.ratingAverage);
+      filtered.sort((a, b) => b.ratingAverage - a.ratingAverage || a.id.localeCompare(b.id));
     } else if (sort === 'popular') {
-      filtered.sort((a, b) => b.salesCount - a.salesCount);
+      filtered.sort((a, b) => b.salesCount - a.salesCount || a.id.localeCompare(b.id));
+    } else {
+      filtered.sort((a, b) => a.id.localeCompare(b.id));
     }
 
     const total = filtered.length;
@@ -304,7 +368,9 @@ router.get('/', async (req: Request, res: Response) => {
         page: pageNum,
         limit: limitNum,
         totalPages: Math.ceil(total / limitNum),
+        hasNextPage: pageNum * limitNum < total,
       },
+      ...(availableBrands ? { brands: availableBrands } : {}),
     });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
@@ -405,6 +471,8 @@ router.get('/search', async (req: Request, res: Response) => {
     const sortBy = (typeof req.query.sort === 'string' ? req.query.sort : conversational.sortBy) || 'popular';
     const page = Math.max(1, parseInt(req.query.page as string, 10) || 1);
     const limit = Math.min(50, Math.max(1, parseInt(req.query.limit as string, 10) || 20));
+    const requestedMinPrice = Number(req.query.effectiveMinPrice);
+    const requestedMaxPrice = Number(req.query.effectiveMaxPrice);
 
     if (isDbConnected()) {
       try {
@@ -442,77 +510,80 @@ router.get('/search', async (req: Request, res: Response) => {
           ];
         }
 
-        if (conversational.maxPrice || conversational.minPrice) {
-          filter.price = {};
-          if (conversational.maxPrice) filter.price.$lte = conversational.maxPrice;
-          if (conversational.minPrice) filter.price.$gte = conversational.minPrice;
+        const minimumPrices = [conversational.minPrice, requestedMinPrice]
+          .filter((price): price is number => typeof price === 'number' && Number.isFinite(price));
+        const maximumPrices = [conversational.maxPrice, requestedMaxPrice]
+          .filter((price): price is number => typeof price === 'number' && Number.isFinite(price));
+        if (minimumPrices.length || maximumPrices.length) {
+          addEffectivePriceFilter(
+            filter,
+            minimumPrices.length ? Math.max(...minimumPrices) : undefined,
+            maximumPrices.length ? Math.min(...maximumPrices) : undefined
+          );
         }
+
+        const brandFilter = { ...filter };
+        const availableBrands = page === 1
+          ? await ProductModel.distinct('brand', brandFilter).exec()
+          : undefined;
+        if (req.query.brand) {
+          filter.brand = new RegExp(`^${escapeRegex(String(req.query.brand))}$`, 'i');
+        }
+
+        const total = await ProductModel.countDocuments(filter);
+        let sortOptions: Record<string, 1 | -1> = { createdAt: -1, _id: -1 };
+        if (sortBy === 'price_asc') sortOptions = { price: 1, _id: 1 };
+        else if (sortBy === 'price_desc') sortOptions = { price: -1, _id: -1 };
+        else if (sortBy === 'rating') sortOptions = { ratingAverage: -1, _id: -1 };
+        else if (sortBy === 'popular') sortOptions = { salesCount: -1, _id: -1 };
 
         const dbMatches = await ProductModel.find(filter)
           .select(CATALOG_PROJECTION)
-          .limit(limit * 2)
+          .sort(sortOptions)
+          .skip((page - 1) * limit)
+          .limit(limit)
           .lean();
 
-        if (dbMatches && dbMatches.length > 0) {
-          // Sort results by relevance score and intent
-          dbMatches.sort((a: any, b: any) => {
-            if (sortBy === 'price_asc') {
-              return (a.salePrice || a.price) - (b.salePrice || b.price);
-            }
-            if (sortBy === 'price_desc') {
-              return (b.salePrice || b.price) - (a.salePrice || a.price);
-            }
-            if (sortBy === 'rating') {
-              return (b.ratingAverage || 0) - (a.ratingAverage || 0);
-            }
-            if (sortBy === 'popular') {
-              return (b.salesCount || 0) - (a.salesCount || 0);
-            }
-
-            const scoreA = tokens.reduce((acc, t) => {
-              if (a.name.toLowerCase().includes(t)) return acc + 50;
-              if (a.banglaKeywords?.includes(t)) return acc + 40;
-              if (a.category.toLowerCase().includes(t)) return acc + 30;
-              return acc + 10;
-            }, 0);
-            const scoreB = tokens.reduce((acc, t) => {
-              if (b.name.toLowerCase().includes(t)) return acc + 50;
-              if (b.banglaKeywords?.includes(t)) return acc + 40;
-              if (b.category.toLowerCase().includes(t)) return acc + 30;
-              return acc + 10;
-            }, 0);
-            return scoreB - scoreA;
-          });
-
-          const paginated = dbMatches.slice((page - 1) * limit, page * limit);
-          res.json({
-            success: true,
-            data: paginated.map(withCanonicalProductId),
-            query: rawQuery,
-            conversational,
-            expandedTokens: tokens,
-            total: dbMatches.length,
-            pagination: {
-              total: dbMatches.length,
-              page,
-              limit,
-              totalPages: Math.ceil(dbMatches.length / limit),
-            },
-          });
-          return;
-        }
+        res.json({
+          success: true,
+          data: dbMatches.map(withCanonicalProductId),
+          query: rawQuery,
+          conversational,
+          expandedTokens: tokens,
+          total,
+          pagination: {
+            total,
+            page,
+            limit,
+            totalPages: Math.ceil(total / limit),
+            hasNextPage: page * limit < total,
+          },
+          ...(availableBrands ? { brands: availableBrands.filter(Boolean).sort() } : {}),
+        });
+        return;
       } catch (err) {
         console.warn('MongoDB search fallback to memory:', err);
       }
     }
 
     // In-memory cross-lingual and conversational scoring and ranking
-    const matched = inMemoryProducts
+    let matched = inMemoryProducts
       .filter((p) => {
         if (p.status !== 'published') return false;
         const effectivePrice = p.salePrice || p.price;
 
-        if (conversational.maxPrice && effectivePrice > conversational.maxPrice) {
+        const minPrice = Math.max(
+          conversational.minPrice || 0,
+          Number.isFinite(requestedMinPrice) ? requestedMinPrice : 0
+        );
+        const maxPrices = [conversational.maxPrice, requestedMaxPrice]
+          .filter((price): price is number => typeof price === 'number' && Number.isFinite(price));
+        const maxPrice = maxPrices.length ? Math.min(...maxPrices) : undefined;
+
+        if (minPrice > 0 && effectivePrice < minPrice) {
+          return false;
+        }
+        if (maxPrice !== undefined && effectivePrice > maxPrice) {
           return false;
         }
         if (conversational.minPrice && effectivePrice < conversational.minPrice) {
@@ -525,6 +596,11 @@ router.get('/search', async (req: Request, res: Response) => {
           if (!pCat.includes(targetCat) && !pSub.includes(targetCat)) {
             return false;
           }
+        }
+        if (req.query.category && req.query.category !== 'all'
+          && !matchesCategoryValue(p.category, String(req.query.category))
+          && !matchesCategoryValue(p.subcategory, String(req.query.category))) {
+          return false;
         }
         return true;
       })
@@ -573,6 +649,14 @@ router.get('/search', async (req: Request, res: Response) => {
       })
       .filter((item): item is { product: SeedProduct; score: number } => item !== null);
 
+    const availableBrands = page === 1
+      ? [...new Set(matched.map((item) => item.product.brand).filter(Boolean))].sort()
+      : undefined;
+    if (req.query.brand) {
+      const requestedBrand = String(req.query.brand).toLowerCase();
+      matched = matched.filter((item) => item.product.brand.toLowerCase() === requestedBrand);
+    }
+
     // Sorting according to explicit request, conversational intent or relevance
     if (sortBy === 'price_asc') {
       matched.sort((a, b) => ((a.product.salePrice || a.product.price) - (b.product.salePrice || b.product.price)));
@@ -603,7 +687,9 @@ router.get('/search', async (req: Request, res: Response) => {
         page,
         limit,
         totalPages: Math.ceil(total / limit),
+        hasNextPage: page * limit < total,
       },
+      ...(availableBrands ? { brands: availableBrands } : {}),
     });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
