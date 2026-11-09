@@ -1359,8 +1359,8 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({
             </button>
           </div>
 
-          {/* Responsive 5-column product grid with 1-column mobile enforcement */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 sm:gap-6">
+          {/* Responsive 5-column product grid */}
+          <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 sm:gap-6">
             {relatedProducts.map((p) => (
               <div key={p.id} className="animate-in fade-in slide-in-from-bottom-2 duration-300">
                 <ProductCard product={p} onViewProduct={onViewProduct} />

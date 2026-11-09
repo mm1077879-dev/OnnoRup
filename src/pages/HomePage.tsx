@@ -501,8 +501,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
               ? 'lg:grid-cols-3'
               : 'lg:grid-cols-4';
 
-          // Strict Phase 4: Small and standard mobile devices display 1 product per row
-          const gridColsClass = `grid-cols-1 sm:grid-cols-2 md:grid-cols-3 ${desktopColsClass} gap-4 sm:gap-6`;
+          const gridColsClass = `grid-cols-2 sm:grid-cols-2 md:grid-cols-3 ${desktopColsClass} gap-4 sm:gap-6`;
 
           return (
             <section key={section.id} className="max-w-7xl mx-auto px-4 sm:px-6">

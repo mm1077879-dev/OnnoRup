@@ -41,6 +41,7 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate }) => {
 
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [mobileCategoriesOpen, setMobileCategoriesOpen] = useState(false);
   const [categoriesDropdownOpen, setCategoriesDropdownOpen] = useState(false);
 
   const accountMenuRef = useRef<HTMLDivElement>(null);
@@ -446,20 +447,34 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate }) => {
             Shop All
           </button>
           <div className="py-2 border-y border-gray-100">
-            <div className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Categories</div>
-            <div className="grid grid-cols-2 gap-2">
-              {categories.map((c) => (
-                <button
-                  key={c.slug}
-                  onClick={() => {
-                    onNavigate('shop', { category: c.slug });
-                    setMobileMenuOpen(false);
-                  }}
-                  className="text-left text-xs text-gray-700 hover:text-emerald-800 py-1 truncate"
-                >
-                  {c.name}
-                </button>
-              ))}
+            <button
+              type="button"
+              onClick={() => setMobileCategoriesOpen((open) => !open)}
+              className="flex w-full min-h-11 items-center justify-between text-left text-xs font-bold text-gray-500 uppercase tracking-wider"
+              aria-expanded={mobileCategoriesOpen}
+              aria-controls="mobile-category-submenu"
+            >
+              <span>Categories</span>
+              <ChevronDown
+                className={`w-4 h-4 transition-transform duration-200 ${mobileCategoriesOpen ? 'rotate-180' : ''}`}
+                aria-hidden="true"
+              />
+            </button>
+            <div id="mobile-category-submenu" hidden={!mobileCategoriesOpen}>
+              <div className="grid grid-cols-2 gap-2 pt-2">
+                {categories.map((c) => (
+                  <button
+                    key={c.slug}
+                    onClick={() => {
+                      onNavigate('shop', { category: c.slug });
+                      setMobileMenuOpen(false);
+                    }}
+                    className="min-h-10 min-w-0 px-2 text-left text-xs text-gray-700 hover:text-emerald-800 truncate"
+                  >
+                    {c.name}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
           <button
