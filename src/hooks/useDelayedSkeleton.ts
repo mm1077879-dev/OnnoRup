@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 
-export const DEFAULT_SKELETON_DELAY_MS = 2500;
+export const DEFAULT_SKELETON_DELAY_MS = 900;
 
 /**
  * Skeleton visibility guardrail.

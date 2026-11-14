@@ -21,7 +21,7 @@ const CartFlyContext = createContext<CartFlyContextType | null>(null);
 export const CartFlyProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [flyingItems, setFlyingItems] = useState<FlyingItem[]>([]);
   const [isCartBouncing, setIsCartBouncing] = useState(false);
-  const bounceTimerRef = useRef<any>(null);
+  const bounceTimerRef = useRef<number | null>(null);
 
   const triggerCartFly = useCallback(
     (
@@ -33,7 +33,7 @@ export const CartFlyProvider: React.FC<{ children: React.ReactNode }> = ({ child
       // Respect prefers-reduced-motion
       if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
         setIsCartBouncing(true);
-        setTimeout(() => setIsCartBouncing(false), 300);
+        window.setTimeout(() => setIsCartBouncing(false), 220);
         return;
       }
 
@@ -84,18 +84,16 @@ export const CartFlyProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
       setFlyingItems((prev) => [...prev, newItem]);
 
-      // When the flying item reaches the cart icon (~750ms)
-      setTimeout(() => {
-        // Trigger cart icon bounce
-        setIsCartBouncing(true);
-        if (bounceTimerRef.current) clearTimeout(bounceTimerRef.current);
-        bounceTimerRef.current = setTimeout(() => {
-          setIsCartBouncing(false);
-        }, 350);
+      // Trigger feedback immediately so the cart feels responsive without any artificial wait.
+      setIsCartBouncing(true);
+      if (bounceTimerRef.current) window.clearTimeout(bounceTimerRef.current);
+      bounceTimerRef.current = window.setTimeout(() => {
+        setIsCartBouncing(false);
+      }, 220);
 
-        // Remove item from flying items array
+      window.setTimeout(() => {
         setFlyingItems((prev) => prev.filter((item) => item.id !== id));
-      }, 750);
+      }, 220);
     },
     []
   );

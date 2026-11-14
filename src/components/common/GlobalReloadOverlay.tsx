@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ShoppingBag } from 'lucide-react';
 
-const RELOAD_DURATION_MS = 3000;
-const FADE_OUT_DURATION_MS = 500;
+const RELOAD_DURATION_MS = 900;
+const FADE_OUT_DURATION_MS = 200;
 
 /**
  * Detects whether the current page load is a genuine browser reload
@@ -55,7 +55,7 @@ export function isBrowserReload(): boolean {
 export const GlobalReloadOverlay: React.FC = () => {
   const [isVisible, setIsVisible] = useState<boolean>(false);
   const [isFadingOut, setIsFadingOut] = useState<boolean>(false);
-  const [secondsRemaining, setSecondsRemaining] = useState<number>(3);
+  const [secondsRemaining, setSecondsRemaining] = useState<number>(1);
   const hasInitialized = useRef<boolean>(false);
 
   useEffect(() => {
@@ -76,7 +76,7 @@ export const GlobalReloadOverlay: React.FC = () => {
     if (isReload) {
       setIsVisible(true);
       setIsFadingOut(false);
-      setSecondsRemaining(3);
+      setSecondsRemaining(1);
 
       // Countdown interval for real-time progress feedback
       const countdownInterval = setInterval(() => {
@@ -88,7 +88,7 @@ export const GlobalReloadOverlay: React.FC = () => {
         setIsFadingOut(true);
       }, RELOAD_DURATION_MS - FADE_OUT_DURATION_MS);
 
-      // Completely remove overlay after exactly 3 seconds
+      // Completely remove overlay after a brief, intentional refresh animation.
       const finishTimer = setTimeout(() => {
         setIsVisible(false);
         setIsFadingOut(false);
@@ -113,7 +113,7 @@ export const GlobalReloadOverlay: React.FC = () => {
     const handleTrigger = () => {
       setIsVisible(true);
       setIsFadingOut(false);
-      setSecondsRemaining(3);
+      setSecondsRemaining(1);
 
       const countdown = setInterval(() => {
         setSecondsRemaining((prev) => Math.max(1, prev - 1));
@@ -179,7 +179,7 @@ export const GlobalReloadOverlay: React.FC = () => {
 
         {/* Progress Bar & Status Text */}
         <div className="w-48 sm:w-56 space-y-2 pt-2">
-          {/* 3-second progress track */}
+          {/* Fast progress track */}
           <div className="w-full h-1.5 bg-emerald-950/80 rounded-full overflow-hidden border border-emerald-800/40">
             <div
               className="h-full bg-gradient-to-r from-emerald-500 via-emerald-400 to-emerald-300 rounded-full transition-all duration-100 ease-linear"

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ProductCard } from '../components/ui/ProductCard';
 import { SeedProduct } from '../../server/data/initialData';
 import {
@@ -65,6 +65,8 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
   const [isSliderHovered, setIsSliderHovered] = useState(false);
   const [loading, setLoading] = useState(true);
   const [testimonialIndex, setTestimonialIndex] = useState(0);
+  const categoryScrollerRef = useRef<HTMLDivElement | null>(null);
+  const [categoryScrollState, setCategoryScrollState] = useState({ canScrollPrev: false, canScrollNext: false });
 
   useEffect(() => {
     async function loadData() {
@@ -153,6 +155,35 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
     if (sliders.length <= 1) return;
     setCurrentSlideIndex((prev) => (prev + 1) % sliders.length);
   };
+
+  const scrollCategories = (direction: 'prev' | 'next') => {
+    const scroller = categoryScrollerRef.current;
+    if (!scroller) return;
+    const distance = Math.max(scroller.clientWidth * 0.8, 220);
+    scroller.scrollBy({ left: direction === 'prev' ? -distance : distance, behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    const scroller = categoryScrollerRef.current;
+    if (!scroller) return;
+
+    const updateScrollState = () => {
+      const maxScrollLeft = scroller.scrollWidth - scroller.clientWidth;
+      setCategoryScrollState({
+        canScrollPrev: scroller.scrollLeft > 8,
+        canScrollNext: scroller.scrollLeft < maxScrollLeft - 8,
+      });
+    };
+
+    updateScrollState();
+    scroller.addEventListener('scroll', updateScrollState, { passive: true });
+    window.addEventListener('resize', updateScrollState);
+
+    return () => {
+      scroller.removeEventListener('scroll', updateScrollState);
+      window.removeEventListener('resize', updateScrollState);
+    };
+  }, [categories]);
 
   const categoryIcons: Record<string, React.ReactNode> = {
     electronics: <Smartphone className="w-5 h-5 text-gray-700" />,
@@ -411,17 +442,43 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
                 )}
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-8 gap-3 sm:gap-4">
+              <div className="flex items-center gap-2 sm:gap-3 mb-4">
+                <button
+                  type="button"
+                  onClick={() => scrollCategories('prev')}
+                  disabled={!categoryScrollState.canScrollPrev}
+                  aria-label="Scroll categories left"
+                  className="hidden sm:flex h-10 w-10 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-700 shadow-sm transition enabled:hover:border-emerald-300 enabled:hover:text-emerald-800 enabled:hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => scrollCategories('next')}
+                  disabled={!categoryScrollState.canScrollNext}
+                  aria-label="Scroll categories right"
+                  className="hidden sm:flex h-10 w-10 items-center justify-center rounded-full border border-gray-200 bg-white text-gray-700 shadow-sm transition enabled:hover:border-emerald-300 enabled:hover:text-emerald-800 enabled:hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div
+                ref={categoryScrollerRef}
+                className="flex gap-3 sm:gap-4 overflow-x-auto pb-2 snap-x snap-mandatory touch-pan-x [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                aria-label="Home category scroller"
+              >
                 {visibleCategories.map((cat) => {
                   const categoryKey = cat.slug || cat.id || cat.name || 'category';
                   const hasImage = Boolean(cat.image) && !categoryImageErrors[categoryKey];
                   const fallbackIcon = categoryIcons[cat.slug] || <Sparkles className="w-5 h-5 sm:w-6 sm:h-6 text-[#00875a]" />;
 
                   return (
-                    <div
+                    <button
                       key={categoryKey}
+                      type="button"
                       onClick={() => onNavigate('shop', { category: cat.slug })}
-                      className="group relative flex flex-col items-center justify-between p-3 sm:p-4 rounded-2xl bg-white border border-gray-100 hover:border-emerald-300 hover:shadow-md hover:-translate-y-0.5 transition-all duration-300 cursor-pointer overflow-hidden text-center"
+                      className="group relative flex min-w-[150px] sm:min-w-[180px] snap-start flex-col items-center justify-between p-3 sm:p-4 rounded-2xl bg-white border border-gray-100 hover:border-emerald-300 hover:shadow-md hover:-translate-y-0.5 transition-all duration-300 cursor-pointer overflow-hidden text-center"
                     >
                       <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-[#f0fdf4] group-hover:bg-[#dcfce7] text-[#00875a] flex items-center justify-center transition-transform duration-300 group-hover:scale-105 shadow-2xs border border-emerald-100 mb-3 shrink-0 overflow-hidden">
                         {hasImage ? (
@@ -441,7 +498,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
                       <span className="text-[11px] text-gray-400 font-medium mt-1 group-hover:text-[#00875a] transition-colors flex items-center gap-0.5">
                         Explore &rarr;
                       </span>
-                    </div>
+                    </button>
                   );
                 })}
               </div>

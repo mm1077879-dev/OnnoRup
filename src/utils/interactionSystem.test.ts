@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { isBrowserReload } from '../components/common/GlobalReloadOverlay';
 import { DEFAULT_SKELETON_DELAY_MS } from '../hooks/useDelayedSkeleton';
 
-test('DEFAULT_SKELETON_DELAY_MS is exactly 2500ms (2.5 seconds)', () => {
-  assert.equal(DEFAULT_SKELETON_DELAY_MS, 2500);
+test('DEFAULT_SKELETON_DELAY_MS is kept short to avoid unnecessary loading delays', () => {
+  assert.equal(DEFAULT_SKELETON_DELAY_MS, 900);
 });
 
 test('isBrowserReload correctly recognizes reload_preview query param override', () => {
