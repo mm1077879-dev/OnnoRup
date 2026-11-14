@@ -99,6 +99,30 @@ interface BlogArticleItem {
   tags: string[];
 }
 
+interface StoreNavigationItem {
+  id: string;
+  label: string;
+  type: 'link' | 'dropdown' | 'category' | 'external';
+  destination: string;
+  parentId?: string | null;
+  displayOrder: number;
+  isActive: boolean;
+  image?: string;
+  description?: string;
+  children?: StoreNavigationItem[];
+}
+
+interface NavigationFormState {
+  label: string;
+  type: StoreNavigationItem['type'];
+  destination: string;
+  parentId: string;
+  displayOrder: number;
+  isActive: boolean;
+  image: string;
+  description: string;
+}
+
 const PRESET_SLIDER_IMAGES = [
   'https://images.unsplash.com/photo-1483985988355-763728e1935b?w=1000&q=80',
   'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=1000&q=80',
@@ -201,6 +225,20 @@ export const CmsAdminPage: React.FC<CmsAdminPageProps> = ({
 
   // Navigation Menu Categories State
   const [navCategories, setNavCategories] = useState<any[]>([]);
+  const [navigationItems, setNavigationItems] = useState<StoreNavigationItem[]>([]);
+  const [navigationModalOpen, setNavigationModalOpen] = useState(false);
+  const [editingNavigationId, setEditingNavigationId] = useState<string | null>(null);
+  const [navigationForm, setNavigationForm] = useState<NavigationFormState>({
+    label: '',
+    type: 'link',
+    destination: '/shop',
+    parentId: '',
+    displayOrder: 1,
+    isActive: true,
+    image: '',
+    description: '',
+  });
+  const [navigationDeleteTarget, setNavigationDeleteTarget] = useState<{ id: string; label: string } | null>(null);
 
   // Ad Form State
   const [adForm, setAdForm] = useState({
@@ -223,6 +261,7 @@ export const CmsAdminPage: React.FC<CmsAdminPageProps> = ({
     loadAdvertisements();
     loadArticles();
     loadNavCategories();
+    loadNavigationItems();
   }, [token]);
 
   useEffect(() => {
@@ -291,6 +330,18 @@ export const CmsAdminPage: React.FC<CmsAdminPageProps> = ({
       }
     } catch (err) {
       console.error('Failed to load categories', err);
+    }
+  };
+
+  const loadNavigationItems = async () => {
+    try {
+      const res = await fetch('/api/navigation');
+      const data = await res.json();
+      if (data.success && Array.isArray(data.data)) {
+        setNavigationItems(data.data);
+      }
+    } catch (err) {
+      console.error('Failed to load navigation items', err);
     }
   };
 
@@ -409,6 +460,110 @@ export const CmsAdminPage: React.FC<CmsAdminPageProps> = ({
       loadArticles();
     } catch (err: any) {
       dispatch(addToast({ type: 'error', message: err.message }));
+    }
+  };
+
+  const openNavigationEditor = (item?: StoreNavigationItem | null) => {
+    if (item) {
+      setEditingNavigationId(item.id);
+      setNavigationForm({
+        label: item.label,
+        type: item.type,
+        destination: item.destination || (item.type === 'dropdown' ? '' : '/shop'),
+        parentId: item.parentId || '',
+        displayOrder: item.displayOrder || 1,
+        isActive: item.isActive !== false,
+        image: item.image || '',
+        description: item.description || '',
+      });
+    } else {
+      setEditingNavigationId(null);
+      setNavigationForm({
+        label: '',
+        type: 'link',
+        destination: '/shop',
+        parentId: '',
+        displayOrder: Math.max(1, navigationItems.length + 1),
+        isActive: true,
+        image: '',
+        description: '',
+      });
+    }
+    setNavigationModalOpen(true);
+  };
+
+  const isDropdownNavigationItem = String(navigationForm.type) === 'dropdown';
+
+  const handleSaveNavigationItem = async (event: React.FormEvent) => {
+    event.preventDefault();
+    try {
+      if (!navigationForm.label.trim()) {
+        throw new Error('Navigation label is required.');
+      }
+
+      if (!isDropdownNavigationItem && !navigationForm.destination.trim()) {
+        throw new Error('Destination is required for this navigation item.');
+      }
+
+      const payload = {
+        label: navigationForm.label.trim(),
+        type: navigationForm.type,
+        destination: isDropdownNavigationItem ? '' : navigationForm.destination.trim(),
+        parentId: navigationForm.parentId || null,
+        displayOrder: Number(navigationForm.displayOrder) || 1,
+        isActive: navigationForm.isActive,
+        image: navigationForm.image.trim(),
+        description: navigationForm.description.trim(),
+      };
+
+      const url = editingNavigationId ? `/api/navigation/${editingNavigationId}` : '/api/navigation';
+      const method = editingNavigationId ? 'PUT' : 'POST';
+
+      const response = await fetch(url, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Failed to save navigation item');
+      }
+
+      dispatch(
+        addToast({
+          type: 'success',
+          title: editingNavigationId ? 'Navigation Updated' : 'Navigation Created',
+          message: `${payload.label} is now live in the storefront header.`,
+        })
+      );
+      setNavigationModalOpen(false);
+      setEditingNavigationId(null);
+      loadNavigationItems();
+    } catch (error: any) {
+      dispatch(addToast({ type: 'error', message: error.message || 'Failed to save navigation item.' }));
+    }
+  };
+
+  const handleDeleteNavigationItem = async () => {
+    if (!navigationDeleteTarget) return;
+
+    try {
+      const response = await fetch(`/api/navigation/${navigationDeleteTarget.id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || 'Failed to delete navigation item');
+
+      dispatch(addToast({ type: 'info', title: 'Navigation Deleted', message: `${navigationDeleteTarget.label} was removed.` }));
+      setNavigationDeleteTarget(null);
+      loadNavigationItems();
+    } catch (error: any) {
+      dispatch(addToast({ type: 'error', message: error.message || 'Failed to delete navigation item.' }));
     }
   };
 
@@ -1558,8 +1713,261 @@ export const CmsAdminPage: React.FC<CmsAdminPageProps> = ({
               );
             })}
           </div>
+
+          <div className="pt-5 border-t border-gray-100 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-bold text-gray-900">Dynamic Storefront Navigation</h3>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  Manage the real header links, dropdowns, and external destinations from the database.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => openNavigationEditor()}
+                className="inline-flex items-center gap-1.5 px-3 py-2 bg-emerald-800 hover:bg-emerald-900 text-white rounded-xl text-xs font-bold transition cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add Navigation Item</span>
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              {navigationItems.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 px-4 py-5 text-xs text-gray-500 text-center">
+                  No dynamic navigation items yet. Add a main menu item or dropdown to drive the storefront header.
+                </div>
+              ) : (
+                navigationItems.map((item) => (
+                  <div key={item.id} className="rounded-2xl border border-gray-200 bg-gray-50 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-800 font-bold text-xs flex items-center justify-center shrink-0">
+                          {item.label?.charAt(0) || 'M'}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="text-xs font-bold text-gray-900 truncate">{item.label}</div>
+                          <div className="text-[11px] font-mono text-gray-500 truncate">
+                            {item.type === 'dropdown' ? 'Dropdown container' : item.destination || 'No destination'}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => openNavigationEditor(item)}
+                          className="p-1.5 rounded-lg bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 transition cursor-pointer"
+                          title="Edit navigation item"
+                        >
+                          <Edit className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setNavigationDeleteTarget({ id: item.id, label: item.label })}
+                          className="p-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 transition cursor-pointer"
+                          title="Delete navigation item"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {item.children && item.children.length > 0 && (
+                      <div className="mt-3 ml-11 space-y-2 border-l border-gray-200 pl-3">
+                        {item.children.map((child) => (
+                          <div key={child.id} className="flex items-center justify-between gap-2 rounded-xl bg-white px-2 py-1.5 border border-gray-100">
+                            <div className="text-[11px] text-gray-700 truncate">{child.label}</div>
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => openNavigationEditor(child)}
+                                className="p-1 text-gray-500 hover:text-gray-700 transition cursor-pointer"
+                                title="Edit child item"
+                              >
+                                <Edit className="w-3 h-3" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setNavigationDeleteTarget({ id: child.id, label: child.label })}
+                                className="p-1 text-rose-500 hover:text-rose-700 transition cursor-pointer"
+                                title="Delete child item"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
         </div>
       )}
+
+      <Modal
+        isOpen={navigationModalOpen}
+        onClose={() => {
+          setNavigationModalOpen(false);
+          setEditingNavigationId(null);
+        }}
+        title={editingNavigationId ? 'Edit Navigation Item' : 'Create Navigation Item'}
+        description="Build the real storefront header links and dropdowns backed by the database."
+        maxWidth="lg"
+      >
+        <form onSubmit={handleSaveNavigationItem} className="space-y-4">
+          <div>
+            <label className="block text-xs font-bold text-gray-700 mb-1">Menu Label *</label>
+            <input
+              type="text"
+              value={navigationForm.label}
+              onChange={(event) => setNavigationForm((current) => ({ ...current, label: event.target.value }))}
+              className="w-full px-3 py-2 border border-gray-300 rounded-xl text-xs text-gray-900 focus:ring-1 focus:ring-emerald-800"
+              placeholder="e.g. Best Sellers"
+              required
+            />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-gray-700 mb-1">Type</label>
+              <select
+                value={navigationForm.type}
+                onChange={(event) => setNavigationForm((current) => ({ ...current, type: event.target.value as StoreNavigationItem['type'] }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-xl text-xs text-gray-900 bg-white focus:ring-1 focus:ring-emerald-800"
+              >
+                <option value="link">Link</option>
+                <option value="dropdown">Dropdown</option>
+                <option value="category">Category Route</option>
+                <option value="external">External Link</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-gray-700 mb-1">Display Order</label>
+              <input
+                type="number"
+                min={1}
+                value={navigationForm.displayOrder}
+                onChange={(event) => setNavigationForm((current) => ({ ...current, displayOrder: Number(event.target.value) || 1 }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-xl text-xs text-gray-900 focus:ring-1 focus:ring-emerald-800"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-gray-700 mb-1">Parent Dropdown</label>
+            <select
+              value={navigationForm.parentId}
+              onChange={(event) => setNavigationForm((current) => ({ ...current, parentId: event.target.value }))}
+              className="w-full px-3 py-2 border border-gray-300 rounded-xl text-xs text-gray-900 bg-white focus:ring-1 focus:ring-emerald-800"
+            >
+              <option value="">Top Level Item</option>
+              {navigationItems
+                .filter((item) => item.type === 'dropdown')
+                .map((item) => (
+                  <option key={item.id} value={item.id}>{item.label}</option>
+                ))}
+            </select>
+          </div>
+
+          {!isDropdownNavigationItem && (
+            <div>
+              <label className="block text-xs font-bold text-gray-700 mb-1">Destination</label>
+              <input
+                type="text"
+                value={navigationForm.destination}
+                onChange={(event) => setNavigationForm((current) => ({ ...current, destination: event.target.value }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-xl text-xs font-mono text-gray-900 focus:ring-1 focus:ring-emerald-800"
+                placeholder="/shop, /about, /blog, https://example.com"
+                required={!isDropdownNavigationItem}
+              />
+            </div>
+          )}
+
+          <div>
+            <label className="block text-xs font-bold text-gray-700 mb-1">Optional menu image URL</label>
+            <input
+              type="url"
+              value={navigationForm.image}
+              onChange={(event) => setNavigationForm((current) => ({ ...current, image: event.target.value }))}
+              placeholder="https://..."
+              className="w-full px-3 py-2 border border-gray-300 rounded-xl text-xs text-gray-900 focus:ring-1 focus:ring-emerald-800"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-gray-700 mb-1">Description</label>
+            <textarea
+              value={navigationForm.description}
+              onChange={(event) => setNavigationForm((current) => ({ ...current, description: event.target.value }))}
+              rows={2}
+              className="w-full px-3 py-2 border border-gray-300 rounded-xl text-xs text-gray-900 resize-none focus:ring-1 focus:ring-emerald-800"
+              placeholder="Optional summary for admin context or richer dropdowns."
+            />
+          </div>
+
+          <label className="flex items-center justify-between rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-xs font-bold text-gray-700">
+            <span>Visible in storefront</span>
+            <input
+              type="checkbox"
+              checked={navigationForm.isActive}
+              onChange={(event) => setNavigationForm((current) => ({ ...current, isActive: event.target.checked }))}
+              className="h-4 w-4 accent-emerald-700"
+            />
+          </label>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <button
+              type="button"
+              onClick={() => setNavigationModalOpen(false)}
+              className="px-4 py-2 rounded-xl border border-gray-200 text-gray-700 text-xs font-bold hover:bg-gray-50 cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="px-4 py-2 rounded-xl bg-emerald-800 hover:bg-emerald-900 text-white text-xs font-bold cursor-pointer"
+            >
+              {editingNavigationId ? 'Save Changes' : 'Create Item'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal
+        isOpen={Boolean(navigationDeleteTarget)}
+        onClose={() => setNavigationDeleteTarget(null)}
+        title="Delete Navigation Item"
+        description="This permanently removes the item and any nested dropdown children."
+        maxWidth="md"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-700">
+            Delete <span className="font-bold">{navigationDeleteTarget?.label}</span>? This action cannot be undone.
+          </p>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setNavigationDeleteTarget(null)}
+              className="px-4 py-2 rounded-xl border border-gray-200 text-gray-700 text-xs font-bold hover:bg-gray-50 cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleDeleteNavigationItem}
+              className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold cursor-pointer"
+            >
+              Delete Item
+            </button>
+          </div>
+        </div>
+      </Modal>
 
       {/* ======================================================== */}
       {/* MODAL 1: ADD / EDIT HERO SLIDER (IMAGE-ONLY) */}

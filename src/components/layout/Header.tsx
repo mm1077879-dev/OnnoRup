@@ -28,6 +28,127 @@ interface HeaderProps {
   onNavigate: (view: string, params?: any) => void;
 }
 
+interface NavigationItem {
+  id: string;
+  label: string;
+  type: 'link' | 'dropdown' | 'category' | 'external';
+  destination: string;
+  parentId?: string | null;
+  isActive?: boolean;
+  image?: string;
+  description?: string;
+  children?: NavigationItem[];
+}
+
+function resolveNavigationDestination(item: NavigationItem): string {
+  if (!item.destination) {
+    return item.type === 'category' ? '/shop' : '/';
+  }
+
+  if (item.type === 'external') {
+    return item.destination;
+  }
+
+  return item.destination;
+}
+
+function navigateToNavigationItem(item: NavigationItem, onNavigate: (view: string, params?: any) => void) {
+  const destination = resolveNavigationDestination(item);
+
+  if (item.type === 'external') {
+    if (destination) {
+      window.open(destination, '_blank', 'noopener,noreferrer');
+    }
+    return;
+  }
+
+  if (!destination || destination === '#') return;
+
+  if (destination.startsWith('http://') || destination.startsWith('https://') || destination.startsWith('//')) {
+    window.open(destination, '_blank', 'noopener,noreferrer');
+    return;
+  }
+
+  const relativePath = destination.startsWith('/') ? destination : `/${destination}`;
+  const [pathWithoutQuery] = relativePath.split('?');
+  const routeMatch = pathWithoutQuery.toLowerCase();
+
+  if (routeMatch === '/shop') {
+    const params = new URLSearchParams(destination.split('?')[1] || '');
+    const category = params.get('category');
+    const q = params.get('q');
+    onNavigate('shop', { category: category || undefined, q: q || undefined });
+    return;
+  }
+
+  if (routeMatch === '/about') {
+    onNavigate('about');
+    return;
+  }
+
+  if (routeMatch === '/contact') {
+    onNavigate('contact');
+    return;
+  }
+
+  if (routeMatch === '/blog') {
+    const slug = destination.includes('slug=') ? new URLSearchParams(destination.split('?')[1] || '').get('slug') : undefined;
+    onNavigate('blog', slug ? { slug } : {});
+    return;
+  }
+
+  if (routeMatch === '/account') {
+    onNavigate('account', { tab: 'orders' });
+    return;
+  }
+
+  if (routeMatch === '/cart') {
+    onNavigate('cart');
+    return;
+  }
+
+  if (routeMatch === '/wishlist') {
+    onNavigate('wishlist');
+    return;
+  }
+
+  if (routeMatch === '/checkout') {
+    onNavigate('checkout');
+    return;
+  }
+
+  if (routeMatch === '/') {
+    onNavigate('home');
+    return;
+  }
+
+  if (routeMatch.startsWith('/product')) {
+    const slugSegment = relativePath.split('/').filter(Boolean).at(-1);
+    onNavigate('product', { slug: slugSegment || item.destination });
+    return;
+  }
+
+  if (item.type === 'category' && item.destination) {
+    onNavigate('shop', { category: item.destination });
+    return;
+  }
+
+  if (item.destination.startsWith('/')) {
+    const target = item.destination.startsWith('/') ? item.destination : `/${item.destination}`;
+    const categoryMatch = target.match(/[?&]category=([^&]+)/i);
+    if (categoryMatch) {
+      onNavigate('shop', { category: decodeURIComponent(categoryMatch[1]) });
+      return;
+    }
+    if (target === '/shop') {
+      onNavigate('shop');
+      return;
+    }
+  }
+
+  onNavigate('shop');
+}
+
 export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate }) => {
   const dispatch = useAppDispatch();
   const lineItemsCount = useAppSelector((state) => state.cart.lineItemsCount);
@@ -43,6 +164,8 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [mobileCategoriesOpen, setMobileCategoriesOpen] = useState(false);
   const [categoriesDropdownOpen, setCategoriesDropdownOpen] = useState(false);
+  const [navigationItems, setNavigationItems] = useState<NavigationItem[]>([]);
+  const [desktopNavDropdownId, setDesktopNavDropdownId] = useState<string | null>(null);
 
   const accountMenuRef = useRef<HTMLDivElement>(null);
 
@@ -67,19 +190,41 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate }) => {
 
   useEffect(() => {
     let active = true;
-    fetch('/api/categories?activeOnly=true')
-      .then((r) => r.json())
-      .then((json) => {
-        if (active && json.success && Array.isArray(json.data)) {
+
+    Promise.all([
+      fetch('/api/categories?activeOnly=true'),
+      fetch('/api/navigation?activeOnly=true'),
+    ])
+      .then(async ([categoryResponse, navigationResponse]) => {
+        const categoryJson = await categoryResponse.json();
+        const navigationJson = await navigationResponse.json();
+
+        if (!active) return;
+
+        if (categoryJson.success && Array.isArray(categoryJson.data)) {
           setCategories(
-            json.data.map((c: any) => ({
+            categoryJson.data.map((c: { name: string; slug: string }) => ({
               name: c.name,
               slug: c.slug,
             }))
           );
         }
+
+        if (navigationJson.success && Array.isArray(navigationJson.data)) {
+          setNavigationItems(
+            navigationJson.data.map((item: NavigationItem) => ({
+              ...item,
+              children: Array.isArray(item.children) ? item.children : [],
+            }))
+          );
+        }
       })
-      .catch(() => {});
+      .catch(() => {
+        if (active) {
+          setNavigationItems([]);
+        }
+      });
+
     return () => {
       active = false;
     };
@@ -134,98 +279,156 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate }) => {
 
         {/* Center Desktop Navigation */}
         <nav className="hidden lg:flex items-center gap-7 text-sm font-medium text-gray-700">
-          <button
-            onClick={() => onNavigate('home')}
-            className={`py-1 transition-colors relative cursor-pointer ${
-              currentView === 'home'
-                ? 'text-emerald-800 font-semibold'
-                : 'text-gray-600 hover:text-emerald-800'
-            }`}
-          >
-            Home
-            {currentView === 'home' && (
-              <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-700 rounded-full" />
-            )}
-          </button>
+          {navigationItems.length > 0 ? (
+            navigationItems.map((item) => {
+              const children = Array.isArray(item.children) ? item.children.filter((child) => child.isActive !== false) : [];
+              const isDropdown = item.type === 'dropdown' || children.length > 0;
+              const isCurrent =
+                (item.destination && item.destination.startsWith('/')) || item.type === 'category'
+                  ? currentView === 'shop' && item.destination.includes('category=')
+                  : currentView === item.destination;
 
-          <button
-            onClick={() => onNavigate('shop')}
-            className={`py-1 transition-colors relative cursor-pointer ${
-              currentView === 'shop'
-                ? 'text-emerald-800 font-semibold'
-                : 'text-gray-600 hover:text-emerald-800'
-            }`}
-          >
-            Shop
-            {currentView === 'shop' && (
-              <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-700 rounded-full" />
-            )}
-          </button>
-
-          {/* Categories Dropdown */}
-          <div
-            className="relative"
-            onMouseEnter={() => setCategoriesDropdownOpen(true)}
-            onMouseLeave={() => setCategoriesDropdownOpen(false)}
-          >
-            <button
-              onClick={() => onNavigate('shop')}
-              className="flex items-center gap-1 py-1 text-gray-600 hover:text-emerald-800 transition cursor-pointer"
-            >
-              <span>Categories</span>
-              <ChevronDown className="w-3.5 h-3.5 text-gray-400" />
-            </button>
-
-            {categoriesDropdownOpen && (
-              <div className="absolute top-full left-0 w-56 bg-white rounded-xl shadow-xl border border-gray-100 py-2 z-50 animate-in fade-in slide-in-from-top-1">
-                {categories.map((c) => (
+              return (
+                <div
+                  key={item.id}
+                  className="relative"
+                  onMouseEnter={() => isDropdown && setDesktopNavDropdownId(item.id)}
+                  onMouseLeave={() => isDropdown && setDesktopNavDropdownId((value) => (value === item.id ? null : value))}
+                >
                   <button
-                    key={c.slug}
+                    type="button"
                     onClick={() => {
-                      onNavigate('shop', { category: c.slug });
-                      setCategoriesDropdownOpen(false);
+                      if (isDropdown && children.length > 0) {
+                        setDesktopNavDropdownId((value) => (value === item.id ? null : item.id));
+                        return;
+                      }
+                      navigateToNavigationItem(item, onNavigate);
                     }}
-                    className="w-full text-left px-4 py-2 text-xs font-medium text-gray-700 hover:bg-emerald-50 hover:text-emerald-800 transition cursor-pointer"
+                    className={`flex items-center gap-1 py-1 transition-colors relative cursor-pointer ${
+                      isCurrent
+                        ? 'text-emerald-800 font-semibold'
+                        : 'text-gray-600 hover:text-emerald-800'
+                    }`}
                   >
-                    {c.name}
+                    <span>{item.label}</span>
+                    {isDropdown && <ChevronDown className="w-3.5 h-3.5 text-gray-400" />}
                   </button>
-                ))}
+
+                  {isDropdown && desktopNavDropdownId === item.id && children.length > 0 && (
+                    <div className="absolute top-full left-0 mt-2 w-60 bg-white rounded-xl shadow-xl border border-gray-100 py-2 z-50">
+                      {children.map((child) => (
+                        <button
+                          key={child.id}
+                          type="button"
+                          onClick={() => {
+                            setDesktopNavDropdownId(null);
+                            navigateToNavigationItem(child, onNavigate);
+                          }}
+                          className="w-full text-left px-4 py-2 text-xs font-medium text-gray-700 hover:bg-emerald-50 hover:text-emerald-800 transition cursor-pointer"
+                        >
+                          {child.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          ) : (
+            <>
+              <button
+                onClick={() => onNavigate('home')}
+                className={`py-1 transition-colors relative cursor-pointer ${
+                  currentView === 'home'
+                    ? 'text-emerald-800 font-semibold'
+                    : 'text-gray-600 hover:text-emerald-800'
+                }`}
+              >
+                Home
+                {currentView === 'home' && (
+                  <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-700 rounded-full" />
+                )}
+              </button>
+
+              <button
+                onClick={() => onNavigate('shop')}
+                className={`py-1 transition-colors relative cursor-pointer ${
+                  currentView === 'shop'
+                    ? 'text-emerald-800 font-semibold'
+                    : 'text-gray-600 hover:text-emerald-800'
+                }`}
+              >
+                Shop
+                {currentView === 'shop' && (
+                  <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-700 rounded-full" />
+                )}
+              </button>
+
+              <div
+                className="relative"
+                onMouseEnter={() => setCategoriesDropdownOpen(true)}
+                onMouseLeave={() => setCategoriesDropdownOpen(false)}
+              >
+                <button
+                  onClick={() => onNavigate('shop')}
+                  className="flex items-center gap-1 py-1 text-gray-600 hover:text-emerald-800 transition cursor-pointer"
+                >
+                  <span>Categories</span>
+                  <ChevronDown className="w-3.5 h-3.5 text-gray-400" />
+                </button>
+
+                {categoriesDropdownOpen && (
+                  <div className="absolute top-full left-0 w-56 bg-white rounded-xl shadow-xl border border-gray-100 py-2 z-50 animate-in fade-in slide-in-from-top-1">
+                    {categories.map((c) => (
+                      <button
+                        key={c.slug}
+                        onClick={() => {
+                          onNavigate('shop', { category: c.slug });
+                          setCategoriesDropdownOpen(false);
+                        }}
+                        className="w-full text-left px-4 py-2 text-xs font-medium text-gray-700 hover:bg-emerald-50 hover:text-emerald-800 transition cursor-pointer"
+                      >
+                        {c.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
-            )}
-          </div>
 
-          <button
-            onClick={() => onNavigate('about')}
-            className={`py-1 transition-colors relative cursor-pointer ${
-              currentView === 'about'
-                ? 'text-emerald-800 font-semibold'
-                : 'text-gray-600 hover:text-emerald-800'
-            }`}
-          >
-            About
-          </button>
+              <button
+                onClick={() => onNavigate('about')}
+                className={`py-1 transition-colors relative cursor-pointer ${
+                  currentView === 'about'
+                    ? 'text-emerald-800 font-semibold'
+                    : 'text-gray-600 hover:text-emerald-800'
+                }`}
+              >
+                About
+              </button>
 
-          <button
-            onClick={() => onNavigate('blog')}
-            className={`py-1 transition-colors relative cursor-pointer ${
-              currentView === 'blog'
-                ? 'text-emerald-800 font-semibold'
-                : 'text-gray-600 hover:text-emerald-800'
-            }`}
-          >
-            Blog
-          </button>
+              <button
+                onClick={() => onNavigate('blog')}
+                className={`py-1 transition-colors relative cursor-pointer ${
+                  currentView === 'blog'
+                    ? 'text-emerald-800 font-semibold'
+                    : 'text-gray-600 hover:text-emerald-800'
+                }`}
+              >
+                Blog
+              </button>
 
-          <button
-            onClick={() => onNavigate('contact')}
-            className={`py-1 transition-colors relative cursor-pointer ${
-              currentView === 'contact'
-                ? 'text-emerald-800 font-semibold'
-                : 'text-gray-600 hover:text-emerald-800'
-            }`}
-          >
-            Contact
-          </button>
+              <button
+                onClick={() => onNavigate('contact')}
+                className={`py-1 transition-colors relative cursor-pointer ${
+                  currentView === 'contact'
+                    ? 'text-emerald-800 font-semibold'
+                    : 'text-gray-600 hover:text-emerald-800'
+                }`}
+              >
+                Contact
+              </button>
+            </>
+          )}
         </nav>
 
         {/* Center-Right Search Bar (Hidden on Wishlist desktop to match reference image design) */}
@@ -428,82 +631,138 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate }) => {
       {/* Mobile Drawer Menu */}
       {mobileMenuOpen && (
         <div className="lg:hidden bg-white border-t border-gray-100 px-4 py-4 space-y-2.5 max-h-[75vh] overflow-y-auto">
-          <button
-            onClick={() => {
-              onNavigate('home');
-              setMobileMenuOpen(false);
-            }}
-            className="block w-full text-left py-2 text-sm font-semibold text-gray-800"
-          >
-            Home
-          </button>
-          <button
-            onClick={() => {
-              onNavigate('shop');
-              setMobileMenuOpen(false);
-            }}
-            className="block w-full text-left py-2 text-sm font-semibold text-gray-800"
-          >
-            Shop All
-          </button>
-          <div className="py-2 border-y border-gray-100">
-            <button
-              type="button"
-              onClick={() => setMobileCategoriesOpen((open) => !open)}
-              className="flex w-full min-h-11 items-center justify-between text-left text-xs font-bold text-gray-500 uppercase tracking-wider"
-              aria-expanded={mobileCategoriesOpen}
-              aria-controls="mobile-category-submenu"
-            >
-              <span>Categories</span>
-              <ChevronDown
-                className={`w-4 h-4 transition-transform duration-200 ${mobileCategoriesOpen ? 'rotate-180' : ''}`}
-                aria-hidden="true"
-              />
-            </button>
-            <div id="mobile-category-submenu" hidden={!mobileCategoriesOpen}>
-              <div className="grid grid-cols-2 gap-2 pt-2">
-                {categories.map((c) => (
-                  <button
-                    key={c.slug}
-                    onClick={() => {
-                      onNavigate('shop', { category: c.slug });
-                      setMobileMenuOpen(false);
-                    }}
-                    className="min-h-10 min-w-0 px-2 text-left text-xs text-gray-700 hover:text-emerald-800 truncate"
-                  >
-                    {c.name}
-                  </button>
-                ))}
+          {navigationItems.length > 0 ? (
+            navigationItems.map((item) => {
+              const children = Array.isArray(item.children) ? item.children.filter((child) => child.isActive !== false) : [];
+              if (children.length > 0) {
+                return (
+                  <div key={item.id} className="py-2 border-y border-gray-100">
+                    <button
+                      type="button"
+                      onClick={() => setMobileCategoriesOpen((open) => (open && item.id === desktopNavDropdownId ? false : !open))}
+                      className="flex w-full min-h-11 items-center justify-between text-left text-xs font-bold text-gray-500 uppercase tracking-wider"
+                      aria-expanded={mobileCategoriesOpen}
+                      aria-controls="mobile-category-submenu"
+                    >
+                      <span>{item.label}</span>
+                      <ChevronDown
+                        className={`w-4 h-4 transition-transform duration-200 ${mobileCategoriesOpen ? 'rotate-180' : ''}`}
+                        aria-hidden="true"
+                      />
+                    </button>
+                    <div id="mobile-category-submenu" hidden={!mobileCategoriesOpen}>
+                      <div className="grid grid-cols-2 gap-2 pt-2">
+                        {children.map((child) => (
+                          <button
+                            key={child.id}
+                            onClick={() => {
+                              navigateToNavigationItem(child, onNavigate);
+                              setMobileMenuOpen(false);
+                            }}
+                            className="min-h-10 min-w-0 px-2 text-left text-xs text-gray-700 hover:text-emerald-800 truncate"
+                          >
+                            {child.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                );
+              }
+
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => {
+                    navigateToNavigationItem(item, onNavigate);
+                    setMobileMenuOpen(false);
+                  }}
+                  className="block w-full text-left py-2 text-sm font-semibold text-gray-800"
+                >
+                  {item.label}
+                </button>
+              );
+            })
+          ) : (
+            <>
+              <button
+                onClick={() => {
+                  onNavigate('home');
+                  setMobileMenuOpen(false);
+                }}
+                className="block w-full text-left py-2 text-sm font-semibold text-gray-800"
+              >
+                Home
+              </button>
+              <button
+                onClick={() => {
+                  onNavigate('shop');
+                  setMobileMenuOpen(false);
+                }}
+                className="block w-full text-left py-2 text-sm font-semibold text-gray-800"
+              >
+                Shop All
+              </button>
+              <div className="py-2 border-y border-gray-100">
+                <button
+                  type="button"
+                  onClick={() => setMobileCategoriesOpen((open) => !open)}
+                  className="flex w-full min-h-11 items-center justify-between text-left text-xs font-bold text-gray-500 uppercase tracking-wider"
+                  aria-expanded={mobileCategoriesOpen}
+                  aria-controls="mobile-category-submenu"
+                >
+                  <span>Categories</span>
+                  <ChevronDown
+                    className={`w-4 h-4 transition-transform duration-200 ${mobileCategoriesOpen ? 'rotate-180' : ''}`}
+                    aria-hidden="true"
+                  />
+                </button>
+                <div id="mobile-category-submenu" hidden={!mobileCategoriesOpen}>
+                  <div className="grid grid-cols-2 gap-2 pt-2">
+                    {categories.map((c) => (
+                      <button
+                        key={c.slug}
+                        onClick={() => {
+                          onNavigate('shop', { category: c.slug });
+                          setMobileMenuOpen(false);
+                        }}
+                        className="min-h-10 min-w-0 px-2 text-left text-xs text-gray-700 hover:text-emerald-800 truncate"
+                      >
+                        {c.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
-          <button
-            onClick={() => {
-              onNavigate('about');
-              setMobileMenuOpen(false);
-            }}
-            className="block w-full text-left py-2 text-sm text-gray-700"
-          >
-            About Us
-          </button>
-          <button
-            onClick={() => {
-              onNavigate('blog');
-              setMobileMenuOpen(false);
-            }}
-            className="block w-full text-left py-2 text-sm text-gray-700"
-          >
-            Blog & Insights
-          </button>
-          <button
-            onClick={() => {
-              onNavigate('contact');
-              setMobileMenuOpen(false);
-            }}
-            className="block w-full text-left py-2 text-sm text-gray-700"
-          >
-            Contact & Support
-          </button>
+              <button
+                onClick={() => {
+                  onNavigate('about');
+                  setMobileMenuOpen(false);
+                }}
+                className="block w-full text-left py-2 text-sm text-gray-700"
+              >
+                About Us
+              </button>
+              <button
+                onClick={() => {
+                  onNavigate('blog');
+                  setMobileMenuOpen(false);
+                }}
+                className="block w-full text-left py-2 text-sm text-gray-700"
+              >
+                Blog & Insights
+              </button>
+              <button
+                onClick={() => {
+                  onNavigate('contact');
+                  setMobileMenuOpen(false);
+                }}
+                className="block w-full text-left py-2 text-sm text-gray-700"
+              >
+                Contact & Support
+              </button>
+            </>
+          )}
 
           <div className="pt-3 border-t border-gray-100">
             {isAuthenticated && user ? (

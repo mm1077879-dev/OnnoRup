@@ -23,6 +23,7 @@ import blogRoutes from './server/routes/blogRoutes';
 import wishlistRoutes from './server/routes/wishlistRoutes';
 import paymentRoutes from './server/routes/paymentRoutes';
 import recommendationRoutes from './server/routes/recommendationRoutes';
+import navigationRoutes from './server/routes/navigationRoutes';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -131,6 +132,7 @@ async function startServer() {
   app.use('/api/wishlist', wishlistRoutes);
   app.use('/api/payment', paymentRoutes);
   app.use('/api/recommendations', recommendationRoutes);
+  app.use('/api/navigation', navigationRoutes);
 
   // Convenience root aliases for sliders, banners, and ads
   app.use('/api/sliders', (req, res, next) => {
